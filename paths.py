@@ -5,6 +5,9 @@ import os
 def get_path_to_terminal_data():
     """Identify path to autopilot data based on computer hostname
     
+    Currently this is set to the "from_clownfish" directory instead of the
+    old "from_octopus" directory.
+    
     Raises IOError if that path does not exist.
     
     Right now this could be in a different user's home directory on each
@@ -17,11 +20,11 @@ def get_path_to_terminal_data():
     # Generate path
     if computer == 'cephalopod':
         path_to_terminal_data = (
-            '/home/chris/mnt/cuttlefish/behavior/from_octopus/autopilot'
+            '/home/chris/mnt/cuttlefish/behavior/from_clownfish/autopilot'
             '/terminal/autopilot/data')
     elif computer == 'octopus':
         path_to_terminal_data = (
-            '/home/mouse/mnt/cuttlefish/from_octopus/autopilot'
+            '/home/mouse/mnt/cuttlefish/from_clownfish/autopilot'
             '/terminal/autopilot/data')
     else:
         path_to_terminal_data = (
