@@ -5,7 +5,7 @@ import numpy as np
 import tables
 import pandas
 
-def parse_hdf5_files(path_to_terminal_data, mouse_names):
+def parse_hdf5_files(path_to_terminal_data, mouse_names, rename_sessions_l=None):
     """Load the data from the specified mice, clean, and return.
     
     path_to_terminal_data : string
@@ -14,6 +14,18 @@ def parse_hdf5_files(path_to_terminal_data, mouse_names):
     
     mouse_names : list of string
         A list of mouse names to load
+    
+    rename_sessions_l : list, or None
+        If None, no renaming is done.
+        Otherwise, each item in the list is a tuple of length 3
+        Each tuple consists of (
+            the session_name the file was saved as,
+            the session_name it should have been saved as,
+            the name of the actual mouse that was tested)
+        Example:
+            ('20220309115351-M2_PAFT-Box2', 
+            '20220309115351-F2_PAFT-Box2', 
+            'F2_PAFT',)        
     
     This function:
     * Uses load_data_from_all_mouse_hdf5 to load all mouse HDF5
@@ -52,7 +64,8 @@ def parse_hdf5_files(path_to_terminal_data, mouse_names):
     # This also drops munged sessions
     session_df, trial_data, poke_data = load_data_from_all_mouse_hdf5(
         mouse_names, munged_sessions=[],
-        path_to_terminal_data=path_to_terminal_data)
+        path_to_terminal_data=path_to_terminal_data,
+        rename_sessions_l=rename_sessions_l)
 
     # Drop useless columns
     poke_data = poke_data.drop(['orig_session_num', 'date', 'box'], axis=1)
@@ -214,7 +227,7 @@ def parse_hdf5_files(path_to_terminal_data, mouse_names):
         }
 
 def load_data_from_all_mouse_hdf5(mouse_names, munged_sessions,
-    path_to_terminal_data):
+    path_to_terminal_data, rename_sessions_l=None):
     """Load trial data and weights from HDF5 files for all mice
     
     See load_data_from_single_hdf5 for how the data is loaded from each mouse.
@@ -231,6 +244,17 @@ def load_data_from_all_mouse_hdf5(mouse_names, munged_sessions,
             /home/chris/autopilot/data
         munged_sessions : list
             A list of munged session names to drop.
+        rename_sessions_l : list or None
+            If None, no renaming is done.
+            Otherwise, each item in the list is a tuple of length 3
+            Each tuple consists of (
+                the session_name the file was saved as,
+                the session_name it should have been saved as,
+                the name of the actual mouse that was tested)
+            Example:
+                ('20220309115351-M2_PAFT-Box2', 
+                '20220309115351-F2_PAFT-Box2', 
+                'F2_PAFT',)
     
     Returns: session_df, trial_data
         session_df : DataFrame
@@ -310,41 +334,28 @@ def load_data_from_all_mouse_hdf5(mouse_names, munged_sessions,
 
 
     ## Rename sessions that were saved by the wrong mouse name
-    # These tuples are (
-    #   the name it was saved as, 
-    #   the name it should have been saved as,
-    #   the name of the actual mouse that was used)
-    rename_sessions_l = [
-        ('20210928150737-Female3_0903-Box1', '20210928150737-Female1_0903-Box1', 'Female1_0903'),
-        ('20211004125106-Male5_0720-Box2', '20211004125106-Male3_0720-Box2', 'Male3_0720'),
-        ('20211005135505-Male4_0720-Box2', '20211005135505-Female4_0903-Box2', 'Female4_0903'),
-        ('20211007133256-Male3_0720-Box2', '20211007133256-Male4_0720-Box2', 'Male4_0720'),
-        ('20211018165733-Male3_0720-Box2', '20211018165733-Male4_0720-Box2', 'Male4_0720'),
-        ('20211106165204-3279-5-Box1', '20211106165204-3279-7-Box1', '3279-7'),
-        ('20220309115351-M2_PAFT-Box2', '20220309115351-F2_PAFT-Box2', 'F2_PAFT',),
-        ]
-    
-    # reset index
-    trial_data = trial_data.reset_index()
-    session_df = session_df.reset_index()
-    
-    # fix
-    for wrong_name, right_name, right_mouse in rename_sessions_l:
-        # Fix trial_data
-        bad_mask = trial_data['session_name'] == wrong_name
-        trial_data.loc[bad_mask, 'session_name'] = right_name
-        trial_data.loc[bad_mask, 'mouse'] = right_mouse
+    if rename_sessions_l is not None:
+        # reset index
+        trial_data = trial_data.reset_index()
+        session_df = session_df.reset_index()
+        
+        # fix
+        for wrong_name, right_name, right_mouse in rename_sessions_l:
+            # Fix trial_data
+            bad_mask = trial_data['session_name'] == wrong_name
+            trial_data.loc[bad_mask, 'session_name'] = right_name
+            trial_data.loc[bad_mask, 'mouse'] = right_mouse
 
-        # Fix session_df
-        bad_mask = session_df['session_name'] == wrong_name
-        session_df.loc[bad_mask, 'session_name'] = right_name
-        session_df.loc[bad_mask, 'mouse'] = right_mouse
+            # Fix session_df
+            bad_mask = session_df['session_name'] == wrong_name
+            session_df.loc[bad_mask, 'session_name'] = right_name
+            session_df.loc[bad_mask, 'mouse'] = right_mouse
 
-    # reset index back again
-    trial_data = trial_data.set_index(
-        ['mouse', 'session_name', 'trial']).sort_index()
-    session_df = session_df.set_index(
-        ['mouse', 'session_name']).sort_index()
+        # reset index back again
+        trial_data = trial_data.set_index(
+            ['mouse', 'session_name', 'trial']).sort_index()
+        session_df = session_df.set_index(
+            ['mouse', 'session_name']).sort_index()
 
 
     ## Error check only one session per mouse per day
