@@ -24,7 +24,7 @@ def get_path_to_terminal_data():
             '/terminal/autopilot/data')
     elif computer == 'octopus':
         path_to_terminal_data = (
-            '/home/mouse/mnt/cuttlefish/from_clownfish/autopilot'
+            '/home/mouse/mnt/cuttlefish/behavior/from_clownfish/autopilot'
             '/terminal/autopilot/data')
     else:
         path_to_terminal_data = (
