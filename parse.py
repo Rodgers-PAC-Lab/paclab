@@ -337,6 +337,7 @@ def load_data_from_all_mouse_hdf5(mouse_names, munged_sessions,
     if rename_sessions_l is not None:
         # reset index
         trial_data = trial_data.reset_index()
+        poke_data = poke_data.reset_index()
         session_df = session_df.reset_index()
         
         # fix
@@ -346,6 +347,11 @@ def load_data_from_all_mouse_hdf5(mouse_names, munged_sessions,
             trial_data.loc[bad_mask, 'session_name'] = right_name
             trial_data.loc[bad_mask, 'mouse'] = right_mouse
 
+            # Fix poke_data
+            bad_mask = poke_data['session_name'] == wrong_name
+            poke_data.loc[bad_mask, 'session_name'] = right_name
+            poke_data.loc[bad_mask, 'mouse'] = right_mouse            
+
             # Fix session_df
             bad_mask = session_df['session_name'] == wrong_name
             session_df.loc[bad_mask, 'session_name'] = right_name
@@ -354,6 +360,8 @@ def load_data_from_all_mouse_hdf5(mouse_names, munged_sessions,
         # reset index back again
         trial_data = trial_data.set_index(
             ['mouse', 'session_name', 'trial']).sort_index()
+        poke_data = poke_data.set_index(
+            ['mouse', 'session_name', 'trial', 'poke']).sort_index()            
         session_df = session_df.set_index(
             ['mouse', 'session_name']).sort_index()
 
