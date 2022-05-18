@@ -472,19 +472,25 @@ def load_data_from_single_hdf5(mouse_name, h5_filename):
                 except IndexError:
                     break
                 
-                # Load poked_port and trial
-                session_poke_port = pandas.DataFrame(session_node['poked_port'][:])
-                session_poke_trial = pandas.DataFrame(session_node['trial'][:])
-                
-                # Stick them together
-                # TODO: check timestamps match
-                assert len(session_poke_port) == len(session_poke_trial)
-                session_poke_port['trial'] = session_poke_trial['trial']
-                
-                # Store
-                session_pokes_l.append(session_poke_port)
-                session_pokes_keys_l.append(session_num)
-                
+                if 'poked_port' in session_node:
+                    # Load poked_port and trial
+                    session_poke_port = pandas.DataFrame(session_node['poked_port'][:])
+                    session_poke_trial = pandas.DataFrame(session_node['trial'][:])
+                    
+                    # Stick them together
+                    # TODO: check timestamps match
+                    assert len(session_poke_port) == len(session_poke_trial)
+                    session_poke_port['trial'] = session_poke_trial['trial']
+                    
+                    # Store
+                    session_pokes_l.append(session_poke_port)
+                    session_pokes_keys_l.append(session_num)
+                    
+                else:
+                    # Empty session with no continuous data, probably
+                    # something went wrong
+                    pass
+
                 # Iterate
                 session_num += 1
             
