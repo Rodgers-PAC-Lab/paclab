@@ -556,21 +556,32 @@ def load_data_from_single_hdf5(mouse_name, h5_filename):
 
     
     ## Asign 'box' based on 'rpi'
-    # This needs to be rewritten to go on rewarded_port not rpi
-    mouse_trial_data['box'] = 'Box3'
-    mouse_poke_data['box'] = 'Box3'
-    #~ mouse_trial_data['box'] = '???'
-    #~ box1_mask = mouse_trial_data['rpi'].isin(
-        #~ ['rpi01', 'rpi02', 'rpi03', 'rpi04'])
-    #~ box2_mask = mouse_trial_data['rpi'].isin(
-        #~ ['rpi05', 'rpi06', 'rpi07', 'rpi08'])
-    #~ box3_mask = mouse_trial_data['rpi'].isin(
-        #~ ['rpi09', 'rpi10', 'rpi11', 'rpi12', 'rpi13'])        
-    #~ mouse_trial_data.loc[box1_mask, 'box'] = 'Box1'
-    #~ mouse_trial_data.loc[box2_mask, 'box'] = 'Box2'
-    #~ mouse_trial_data.loc[box3_mask, 'box'] = 'Box3'
-    #~ assert mouse_trial_data['box'].isin(['Box1', 'Box2', 'Box3']).all()
+    # For mouse_trial_data
+    mouse_trial_data['box'] = '???'
+    box1_mask = mouse_trial_data['rewarded_port'].isin(
+        ['rpi01', 'rpi02', 'rpi03', 'rpi04'])
+    box2_mask = mouse_trial_data['rewarded_port'].isin(
+        ['rpi05', 'rpi06', 'rpi07', 'rpi08'])
+    box3_mask = mouse_trial_data['rewarded_port'].isin(
+        ['rpi09', 'rpi10', 'rpi11', 'rpi12'])
+    mouse_trial_data.loc[box1_mask, 'box'] = 'Box1'
+    mouse_trial_data.loc[box2_mask, 'box'] = 'Box2'
+    mouse_trial_data.loc[box3_mask, 'box'] = 'Box3'
+    assert mouse_trial_data['box'].isin(['Box1', 'Box2', 'Box3']).all()
 
+    # For mouse_poke_data
+    mouse_poke_data['box'] = '???'
+    box1_mask = mouse_poke_data['rewarded_port'].isin(
+        ['rpi01', 'rpi02', 'rpi03', 'rpi04'])
+    box2_mask = mouse_poke_data['rewarded_port'].isin(
+        ['rpi05', 'rpi06', 'rpi07', 'rpi08'])
+    box3_mask = mouse_poke_data['rewarded_port'].isin(
+        ['rpi09', 'rpi10', 'rpi11', 'rpi12'])
+    mouse_poke_data.loc[box1_mask, 'box'] = 'Box1'
+    mouse_poke_data.loc[box2_mask, 'box'] = 'Box2'
+    mouse_poke_data.loc[box3_mask, 'box'] = 'Box3'
+    assert mouse_poke_data['box'].isin(['Box1', 'Box2', 'Box3']).all()
+    
     
     ## Identify sessions
     # Sometimes the session number restarts numbering and I don't know why
