@@ -68,7 +68,7 @@ def parse_hdf5_files(path_to_terminal_data, mouse_names, rename_sessions_l=None)
         rename_sessions_l=rename_sessions_l)
 
     # Drop useless columns
-    poke_data = poke_data.drop(['orig_session_num', 'date', 'box'], axis=1)
+    poke_data = poke_data.drop(['orig_session_num', 'date'], axis=1)
     trial_data = trial_data.drop('trial_num', axis=1)
     session_df = session_df.drop('stop', axis=1)
 
@@ -569,9 +569,9 @@ def load_data_from_single_hdf5(mouse_name, h5_filename):
     box1_mask = mouse_trial_data['rewarded_port'].isin(
         ['rpi01', 'rpi02', 'rpi03', 'rpi04'])
     box2_mask = mouse_trial_data['rewarded_port'].isin(
-        ['rpi05', 'rpi06', 'rpi07', 'rpi08'])
+        ['rpi05_L','rpi05_R','rpi06_L','rpi06_R','rpi07_L','rpi07_R','rpi08_L','rpi08_R'])
     box3_mask = mouse_trial_data['rewarded_port'].isin(
-        ['rpi09', 'rpi10', 'rpi11', 'rpi12'])
+        ['rpi09_L','rpi09_R','rpi10_L','rpi10_R','rpi11_L','rpi11_R','rpi12_L','rpi12_R'])
     mouse_trial_data.loc[box1_mask, 'box'] = 'Box1'
     mouse_trial_data.loc[box2_mask, 'box'] = 'Box2'
     mouse_trial_data.loc[box3_mask, 'box'] = 'Box3'
@@ -579,12 +579,12 @@ def load_data_from_single_hdf5(mouse_name, h5_filename):
 
     # For mouse_poke_data
     mouse_poke_data['box'] = '???'
-    box1_mask = mouse_poke_data['rewarded_port'].isin(
+    box1_mask = mouse_poke_data['poked_port'].isin(
         ['rpi01', 'rpi02', 'rpi03', 'rpi04'])
-    box2_mask = mouse_poke_data['rewarded_port'].isin(
-        ['rpi05', 'rpi06', 'rpi07', 'rpi08'])
-    box3_mask = mouse_poke_data['rewarded_port'].isin(
-        ['rpi09', 'rpi10', 'rpi11', 'rpi12'])
+    box2_mask = mouse_poke_data['poked_port'].isin(
+        ['rpi05_L', 'rpi05_R', 'rpi06_L', 'rpi06_R', 'rpi07_L', 'rpi07_R', 'rpi08_L', 'rpi08_R'])
+    box3_mask = mouse_poke_data['poked_port'].isin(
+        ['rpi09_L','rpi09_R','rpi10_L','rpi10_R','rpi11_L','rpi11_R','rpi12_L','rpi12_R'])
     mouse_poke_data.loc[box1_mask, 'box'] = 'Box1'
     mouse_poke_data.loc[box2_mask, 'box'] = 'Box2'
     mouse_poke_data.loc[box3_mask, 'box'] = 'Box3'
