@@ -5,7 +5,7 @@ import numpy as np
 import tables
 import pandas
 
-def parse_hdf5_files(path_to_terminal_data, mouse_names, rename_sessions_l=None):
+def parse_hdf5_files(path_to_terminal_data, mouse_names, rename_sessions_l=None,protocol_name='PAFT'):
     """Load the data from the specified mice, clean, and return.
     
     path_to_terminal_data : string
@@ -65,7 +65,7 @@ def parse_hdf5_files(path_to_terminal_data, mouse_names, rename_sessions_l=None)
     session_df, trial_data, poke_data = load_data_from_all_mouse_hdf5(
         mouse_names, munged_sessions=[],
         path_to_terminal_data=path_to_terminal_data,
-        rename_sessions_l=rename_sessions_l)
+        rename_sessions_l=rename_sessions_l,protocol_name=protocol_name)
 
     # Drop useless columns
     poke_data = poke_data.drop(['orig_session_num', 'date'], axis=1)
@@ -227,7 +227,7 @@ def parse_hdf5_files(path_to_terminal_data, mouse_names, rename_sessions_l=None)
         }
 
 def load_data_from_all_mouse_hdf5(mouse_names, munged_sessions,
-    path_to_terminal_data, rename_sessions_l=None):
+    path_to_terminal_data, rename_sessions_l=None,protocol_name='PAFT'):
     """Load trial data and weights from HDF5 files for all mice
     
     See load_data_from_single_hdf5 for how the data is loaded from each mouse.
@@ -300,7 +300,7 @@ def load_data_from_all_mouse_hdf5(mouse_names, munged_sessions,
         
         # Load data
         mouse_session_df, mouse_trial_data, mouse_poke_data = (
-            load_data_from_single_hdf5(mouse_name, h5_filename))
+            load_data_from_single_hdf5(mouse_name, h5_filename,protocol_name))
         
         # Skip if None
         if mouse_session_df is None and mouse_trial_data is None:
@@ -395,7 +395,7 @@ def load_data_from_all_mouse_hdf5(mouse_names, munged_sessions,
     # Return
     return session_df, trial_data, poke_data
 
-def load_data_from_single_hdf5(mouse_name, h5_filename):
+def load_data_from_single_hdf5(mouse_name, h5_filename,protocol_name):
     """Load session and trial data from a single mouse's HDF5 file
     
     The trial data and the weights are loaded from the HDF5 file. The
@@ -454,11 +454,19 @@ def load_data_from_single_hdf5(mouse_name, h5_filename):
     cannot_load = False
     try:
         with tables.open_file(h5_filename) as fi:
-            mouse_trial_data = pandas.DataFrame(
-                fi.root['data']['PAFT']['S00_PAFT']['trial_data'][:])
-            mouse_weights = pandas.DataFrame(
-                fi.root['history']['weights'][:])
-            
+            if protocol_name=='PAFT' :
+                mouse_trial_data = pandas.DataFrame(
+                    fi.root['data']['PAFT']['S00_PAFT']['trial_data'][:])
+                mouse_weights = pandas.DataFrame(
+                    fi.root['history']['weights'][:])
+            elif protocol_name=='Distractors220519':
+                mouse_trial_data = pandas.DataFrame(
+                    fi.root['data']['Distractors220519']['S00_PAFT']['trial_data'][:])
+                mouse_weights = pandas.DataFrame(
+                    fi.root['history']['weights'][:])
+            else:
+                print("Fine here's a thing")
+                ## TODO: ADD ERROR HANDLING
             # get sessions one at a time
             session_num = 1
             session_pokes_l = []
@@ -466,26 +474,35 @@ def load_data_from_single_hdf5(mouse_name, h5_filename):
             while True:
                 # Load this session if it exists
                 try:
-                    session_node = (
+                    if protocol_name=='PAFT':
+                       session_node = (
                         fi.root['data']['PAFT']['S00_PAFT']['continuous_data'][
                         'session_{}'.format(session_num)])
+                    elif protocol_name=='Distractors220519':
+                        session_node = (
+                            fi.root['data']['Distractors220519']['S00_PAFT'][
+                                'continuous_data'][
+                                'session_{}'.format(session_num)])
+                    else:
+                        print("Fine here's a thing")
+                        ## TODO: ADD ERROR HANDLING
                 except IndexError:
                     break
-                
+
                 if 'poked_port' in session_node:
                     # Load poked_port and trial
                     session_poke_port = pandas.DataFrame(session_node['poked_port'][:])
                     session_poke_trial = pandas.DataFrame(session_node['trial'][:])
-                    
+
                     # Stick them together
                     # TODO: check timestamps match
                     assert len(session_poke_port) == len(session_poke_trial)
                     session_poke_port['trial'] = session_poke_trial['trial']
-                    
+
                     # Store
                     session_pokes_l.append(session_poke_port)
                     session_pokes_keys_l.append(session_num)
-                    
+
                 else:
                     # Empty session with no continuous data, probably
                     # something went wrong
@@ -493,10 +510,10 @@ def load_data_from_single_hdf5(mouse_name, h5_filename):
 
                 # Iterate
                 session_num += 1
-            
+
             # Concat pokes
             mouse_poke_data = pandas.concat(
-                session_pokes_l, keys=session_pokes_keys_l, 
+                session_pokes_l, keys=session_pokes_keys_l,
                 names=['session', 'poke'])
 
     except tables.HDF5ExtError:
