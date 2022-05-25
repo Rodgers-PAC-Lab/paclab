@@ -5,7 +5,8 @@ import numpy as np
 import tables
 import pandas
 
-def parse_hdf5_files(path_to_terminal_data, mouse_names, rename_sessions_l=None,protocol_name='PAFT'):
+def parse_hdf5_files(path_to_terminal_data, mouse_names, rename_sessions_l=None,
+    protocol_name='PAFT'):
     """Load the data from the specified mice, clean, and return.
     
     path_to_terminal_data : string
@@ -26,6 +27,9 @@ def parse_hdf5_files(path_to_terminal_data, mouse_names, rename_sessions_l=None,
             ('20220309115351-M2_PAFT-Box2', 
             '20220309115351-F2_PAFT-Box2', 
             'F2_PAFT',)        
+    
+    protocol_name : string
+        This is the protocol to load from the HDF5 file. 
     
     This function:
     * Uses load_data_from_all_mouse_hdf5 to load all mouse HDF5
@@ -65,7 +69,7 @@ def parse_hdf5_files(path_to_terminal_data, mouse_names, rename_sessions_l=None,
     session_df, trial_data, poke_data = load_data_from_all_mouse_hdf5(
         mouse_names, munged_sessions=[],
         path_to_terminal_data=path_to_terminal_data,
-        rename_sessions_l=rename_sessions_l,protocol_name=protocol_name)
+        rename_sessions_l=rename_sessions_l, protocol_name=protocol_name)
 
     # Drop useless columns
     poke_data = poke_data.drop(['orig_session_num', 'date'], axis=1)
@@ -227,7 +231,8 @@ def parse_hdf5_files(path_to_terminal_data, mouse_names, rename_sessions_l=None,
         }
 
 def load_data_from_all_mouse_hdf5(mouse_names, munged_sessions,
-    path_to_terminal_data, rename_sessions_l=None,protocol_name='PAFT'):
+    path_to_terminal_data, rename_sessions_l=None,
+    protocol_name='PAFT'):
     """Load trial data and weights from HDF5 files for all mice
     
     See load_data_from_single_hdf5 for how the data is loaded from each mouse.
@@ -255,6 +260,8 @@ def load_data_from_all_mouse_hdf5(mouse_names, munged_sessions,
                 ('20220309115351-M2_PAFT-Box2', 
                 '20220309115351-F2_PAFT-Box2', 
                 'F2_PAFT',)
+        protocol_name : string
+            The protocol name to load from the file
     
     Returns: session_df, trial_data
         session_df : DataFrame
@@ -300,7 +307,7 @@ def load_data_from_all_mouse_hdf5(mouse_names, munged_sessions,
         
         # Load data
         mouse_session_df, mouse_trial_data, mouse_poke_data = (
-            load_data_from_single_hdf5(mouse_name, h5_filename,protocol_name))
+            load_data_from_single_hdf5(mouse_name, h5_filename, protocol_name))
         
         # Skip if None
         if mouse_session_df is None and mouse_trial_data is None:
@@ -395,7 +402,8 @@ def load_data_from_all_mouse_hdf5(mouse_names, munged_sessions,
     # Return
     return session_df, trial_data, poke_data
 
-def load_data_from_single_hdf5(mouse_name, h5_filename,protocol_name):
+def load_data_from_single_hdf5(mouse_name, h5_filename, 
+    protocol_name='PAFT'):
     """Load session and trial data from a single mouse's HDF5 file
     
     The trial data and the weights are loaded from the HDF5 file. The
@@ -414,6 +422,8 @@ def load_data_from_single_hdf5(mouse_name, h5_filename,protocol_name):
             Used to name the sessions
         h5_filename : string
             The filename to a single mouse's HDF5 file
+        protocol_name : string
+            The protocol to load from the file
     
     Returns: mouse_session_df, mouse_trial_data
         None, None if the hdf5 file can't be loaded
@@ -454,19 +464,12 @@ def load_data_from_single_hdf5(mouse_name, h5_filename,protocol_name):
     cannot_load = False
     try:
         with tables.open_file(h5_filename) as fi:
-            if protocol_name=='PAFT' :
-                mouse_trial_data = pandas.DataFrame(
-                    fi.root['data']['PAFT']['S00_PAFT']['trial_data'][:])
-                mouse_weights = pandas.DataFrame(
-                    fi.root['history']['weights'][:])
-            elif protocol_name=='Distractors220519':
-                mouse_trial_data = pandas.DataFrame(
-                    fi.root['data']['Distractors220519']['S00_PAFT']['trial_data'][:])
-                mouse_weights = pandas.DataFrame(
-                    fi.root['history']['weights'][:])
-            else:
-                print("Fine here's a thing")
-                ## TODO: ADD ERROR HANDLING
+            # Load trial_data and weights from HDF5 file
+            mouse_trial_data = pandas.DataFrame(
+                fi.root['data'][protocol_name]['S00_PAFT']['trial_data'][:])
+            mouse_weights = pandas.DataFrame(
+                fi.root['history']['weights'][:])            
+           
             # get sessions one at a time
             session_num = 1
             session_pokes_l = []
@@ -474,18 +477,9 @@ def load_data_from_single_hdf5(mouse_name, h5_filename,protocol_name):
             while True:
                 # Load this session if it exists
                 try:
-                    if protocol_name=='PAFT':
-                       session_node = (
-                        fi.root['data']['PAFT']['S00_PAFT']['continuous_data'][
-                        'session_{}'.format(session_num)])
-                    elif protocol_name=='Distractors220519':
-                        session_node = (
-                            fi.root['data']['Distractors220519']['S00_PAFT'][
-                                'continuous_data'][
-                                'session_{}'.format(session_num)])
-                    else:
-                        print("Fine here's a thing")
-                        ## TODO: ADD ERROR HANDLING
+                    session_node = (
+                        fi.root['data'][protocol_name]['S00_PAFT'][
+                        'continuous_data']['session_{}'.format(session_num)])
                 except IndexError:
                     break
 
