@@ -5,7 +5,9 @@ import numpy as np
 import tables
 import pandas
 
-def parse_hdf5_files(path_to_terminal_data, mouse_names, rename_sessions_l=None,
+def parse_hdf5_files(path_to_terminal_data, mouse_names, 
+    munged_sessions=None,
+    rename_sessions_l=None,
     protocol_name='PAFT'):
     """Load the data from the specified mice, clean, and return.
     
@@ -15,6 +17,9 @@ def parse_hdf5_files(path_to_terminal_data, mouse_names, rename_sessions_l=None,
     
     mouse_names : list of string
         A list of mouse names to load
+    
+    munged_sessions : list of string
+        A list of session names to drop
     
     rename_sessions_l : list, or None
         If None, no renaming is done.
@@ -67,7 +72,7 @@ def parse_hdf5_files(path_to_terminal_data, mouse_names, rename_sessions_l=None,
     ## Load trial data and weights from the HDF5 files
     # This also drops munged sessions
     session_df, trial_data, poke_data = load_data_from_all_mouse_hdf5(
-        mouse_names, munged_sessions=[],
+        mouse_names, munged_sessions=munged_sessions,
         path_to_terminal_data=path_to_terminal_data,
         rename_sessions_l=rename_sessions_l, protocol_name=protocol_name)
 
@@ -247,8 +252,9 @@ def load_data_from_all_mouse_hdf5(mouse_names, munged_sessions,
         mouse_names : list
             A list of mouse names. Each should be an HDF5 file in 
             /home/chris/autopilot/data
-        munged_sessions : list
+        munged_sessions : list, or None
             A list of munged session names to drop.
+            If None, drop no sessions
         rename_sessions_l : list or None
             If None, no renaming is done.
             Otherwise, each item in the list is a tuple of length 3
@@ -330,11 +336,12 @@ def load_data_from_all_mouse_hdf5(mouse_names, munged_sessions,
 
     # Drop munged sessions
     droppable_sessions = []
-    for munged_session in munged_sessions:
-        if munged_session in session_df.index.levels[1]:
-            droppable_sessions.append(munged_session)
-        else:
-            print("warning: cannot find {} to drop it".format(munged_session))
+    if munged_sessions is not None:
+        for munged_session in munged_sessions:
+            if munged_session in session_df.index.levels[1]:
+                droppable_sessions.append(munged_session)
+            else:
+                print("warning: cannot find {} to drop it".format(munged_session))
     session_df = session_df.drop(droppable_sessions, level='session_name')
     trial_data = trial_data.drop(droppable_sessions, level='session_name')
     poke_data = poke_data.drop(droppable_sessions, level='session_name')
@@ -518,11 +525,27 @@ def load_data_from_single_hdf5(mouse_name, h5_filename,
         return None, None
     
 
+    def convert_string_to_dt(s):
+        if s == '':
+            return pandas.NaT
+        else:
+            return datetime.datetime.fromisoformat(s)
+
+    
+    ## Sometimes trials have a blank timestamp_trial_start
+    # I think this only happens when it crashes right away
+    # Drop those trials, hopefully nothing else breaks
+    mouse_trial_data = mouse_trial_data[
+        mouse_trial_data['timestamp_trial_start'] != b''].copy()
+
+
     ## Coerce dtypes for mouse_trial_data
     # Decode columns that are bytes
     for decode_col in ['previously_rewarded_port', 'rewarded_port', 
             'timestamp_reward', 'timestamp_trial_start']:
-        mouse_trial_data[decode_col] = mouse_trial_data[decode_col].str.decode('utf-8')
+        mouse_trial_data[decode_col] = (
+            mouse_trial_data[decode_col].str.decode('utf-8')
+            )
 
     # Coerce timestamp to datetime
     for timestamp_column in ['timestamp_reward', 'timestamp_trial_start']:
