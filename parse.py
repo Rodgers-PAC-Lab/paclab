@@ -330,9 +330,12 @@ def load_data_from_all_mouse_hdf5(mouse_names, munged_sessions,
         keys_l.append(mouse_name)
     
     # Concatenate
-    session_df = pandas.concat(msd_l, keys=keys_l, names=['mouse'])
-    trial_data = pandas.concat(mtd_l, keys=keys_l, names=['mouse'])
-    poke_data = pandas.concat(mpd_l, keys=keys_l, names=['mouse'])
+    session_df = pandas.concat(
+        msd_l, keys=keys_l, names=['mouse'], verify_integrity=True)
+    trial_data = pandas.concat(
+        mtd_l, keys=keys_l, names=['mouse'], verify_integrity=True)
+    poke_data = pandas.concat(
+        mpd_l, keys=keys_l, names=['mouse'], verify_integrity=True)
 
     # Drop munged sessions
     droppable_sessions = []
@@ -532,7 +535,7 @@ def load_data_from_single_hdf5(mouse_name, h5_filename,
         else:
             return datetime.datetime.fromisoformat(s)
 
-    
+
     ## Sometimes trials have a blank timestamp_trial_start
     # I think this only happens when it crashes right away
     # Drop those trials, hopefully nothing else breaks
@@ -739,19 +742,36 @@ def load_data_from_single_hdf5(mouse_name, h5_filename,
     ## Index everything by session_name and whatever else makes sense
     mouse_trial_data = mouse_trial_data.rename(
         columns={'trial_in_session': 'trial'})    
+    
+    # Identify any duplicated trials, and drop those sessions
+    # Not sure why this happens!
+    dups = mouse_trial_data.loc[
+        mouse_trial_data.duplicated(subset=['session_name', 'trial'], 
+        keep=False)][['session_name', 'trial']]
+    if len(dups) > 0:
+        dup_sessions = dups['session_name'].unique()
+        print("warning: dropping sessions with duplicated trials:\n{}".format(
+            str(dups)))
+        mouse_trial_data = mouse_trial_data[
+            ~mouse_trial_data['session_name'].isin(dup_sessions)].copy()
+    
+    # Set index
     mouse_trial_data = mouse_trial_data.set_index(
         ['session_name', 'trial'])
     mouse_poke_data = mouse_poke_data.set_index(
         ['session_name', 'trial', 'poke'])
     session_df = session_df.set_index('session_name')
     
+    # Sort index
     mouse_trial_data = mouse_trial_data.sort_index()
     mouse_poke_data = mouse_poke_data.sort_index()
     session_df = session_df.sort_index()
 
     # Error check
     assert not session_df.index.duplicated().any()
-
+    assert not mouse_trial_data.duplicated().any()
+    assert not mouse_poke_data.duplicated().any()
+    
     
     ## Return
     return session_df, mouse_trial_data, mouse_poke_data
