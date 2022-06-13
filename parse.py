@@ -342,9 +342,10 @@ def load_data_from_all_mouse_hdf5(mouse_names, munged_sessions,
                 droppable_sessions.append(munged_session)
             else:
                 print("warning: cannot find {} to drop it".format(munged_session))
-    session_df = session_df.drop(droppable_sessions, level='session_name')
-    trial_data = trial_data.drop(droppable_sessions, level='session_name')
-    poke_data = poke_data.drop(droppable_sessions, level='session_name')
+    if len(droppable_sessions) > 0:
+        session_df = session_df.drop(droppable_sessions, level='session_name')
+        trial_data = trial_data.drop(droppable_sessions, level='session_name')
+        poke_data = poke_data.drop(droppable_sessions, level='session_name')
 
 
     ## Rename sessions that were saved by the wrong mouse name
