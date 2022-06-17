@@ -413,6 +413,65 @@ def load_data_from_all_mouse_hdf5(mouse_names, munged_sessions,
     # Return
     return session_df, trial_data, poke_data
 
+def _parse_single_protocol_from_file(fi, this_protocol):
+    """Load the trial data and continuous data from a single protocol
+    
+    This is only meant to be called from load_data_from_single_hdf5
+    
+    fi : open file handle
+    this_protocol : name of protocol
+    
+    Returns: mouse_trial_data, mouse_poke_data
+    """
+    # Load trial_data and weights from HDF5 file
+    mouse_trial_data = pandas.DataFrame(
+        fi.root['data'][this_protocol]['S00_PAFT']['trial_data'][:])
+   
+    # Get continuous_data from each session
+    session_num = 1
+    session_pokes_l = []
+    session_pokes_keys_l = []
+    while True:
+        # Load this session if it exists
+        try:
+            session_node = (
+                fi.root['data'][this_protocol]['S00_PAFT'][
+                'continuous_data']['session_{}'.format(session_num)])
+        except IndexError:
+            break
+
+        if 'poked_port' in session_node:
+            # Load poked_port and trial
+            session_poke_port = pandas.DataFrame(session_node['poked_port'][:])
+            session_poke_trial = pandas.DataFrame(session_node['trial'][:])
+
+            # Stick them together
+            # TODO: check timestamps match
+            assert len(session_poke_port) == len(session_poke_trial)
+            session_poke_port['trial'] = session_poke_trial['trial']
+
+            # Store
+            session_pokes_l.append(session_poke_port)
+            session_pokes_keys_l.append(session_num)
+
+        else:
+            # Empty session with no continuous data, probably
+            # something went wrong
+            pass
+
+        # Iterate
+        session_num += 1
+
+    # Concat pokes
+    if len(session_pokes_l) == 0:
+        mouse_poke_data = None
+    else:
+        mouse_poke_data = pandas.concat(
+            session_pokes_l, keys=session_pokes_keys_l,
+            names=['session', 'poke'])
+    
+    return mouse_trial_data, mouse_poke_data
+
 def load_data_from_single_hdf5(mouse_name, h5_filename, 
     protocol_name='PAFT'):
     """Load session and trial data from a single mouse's HDF5 file
@@ -475,65 +534,58 @@ def load_data_from_single_hdf5(mouse_name, h5_filename,
     cannot_load = False
     try:
         with tables.open_file(h5_filename) as fi:
-            # Load trial_data and weights from HDF5 file
-            mouse_trial_data = pandas.DataFrame(
-                fi.root['data'][protocol_name]['S00_PAFT']['trial_data'][:])
-            mouse_weights = pandas.DataFrame(
-                fi.root['history']['weights'][:])            
-           
-            # get sessions one at a time
-            session_num = 1
-            session_pokes_l = []
-            session_pokes_keys_l = []
-            while True:
-                # Load this session if it exists
-                try:
-                    session_node = (
-                        fi.root['data'][protocol_name]['S00_PAFT'][
-                        'continuous_data']['session_{}'.format(session_num)])
-                except IndexError:
-                    break
+            # Get the weights
+            mouse_weights = pandas.DataFrame(fi.root['history']['weights'][:])            
 
-                if 'poked_port' in session_node:
-                    # Load poked_port and trial
-                    session_poke_port = pandas.DataFrame(session_node['poked_port'][:])
-                    session_poke_trial = pandas.DataFrame(session_node['trial'][:])
-
-                    # Stick them together
-                    # TODO: check timestamps match
-                    assert len(session_poke_port) == len(session_poke_trial)
-                    session_poke_port['trial'] = session_poke_trial['trial']
-
-                    # Store
-                    session_pokes_l.append(session_poke_port)
-                    session_pokes_keys_l.append(session_num)
-
-                else:
-                    # Empty session with no continuous data, probably
-                    # something went wrong
-                    pass
-
-                # Iterate
-                session_num += 1
-
-            # Concat pokes
-            mouse_poke_data = pandas.concat(
-                session_pokes_l, keys=session_pokes_keys_l,
-                names=['session', 'poke'])
+            # Either get all contained protocols or just the provided one
+            if protocol_name is None:
+                # Use all of them
+                list_of_protocol_names = [
+                    node._v_name for node in fi.root['data']._f_list_nodes()]
+            else:
+                # Just the provided one
+                list_of_protocol_names = [protocol_name]
+            
+            # Iterate over protocol names and load each
+            this_mouse_trial_data_l = []
+            this_mouse_poke_data_l = []
+            for this_protocol in list_of_protocol_names:
+                # Load 
+                loaded = _parse_single_protocol_from_file(fi, this_protocol)
+                
+                # Parse
+                this_mouse_trial_data = loaded[0]
+                this_mouse_poke_data = loaded[1]
+                
+                # Store
+                this_mouse_trial_data_l.append(this_mouse_trial_data)
+                this_mouse_poke_data_l.append(this_mouse_poke_data)
 
     except tables.HDF5ExtError:
         cannot_load = True
     
+    # Return None, None if no protocols
+    if len(list_of_protocol_names) == 0:
+        print("no protocols to load in {}".format(h5_filename))
+    
+    # Return None, None if loading error
     if cannot_load:
         print("cannot load {}".format(h5_filename))
-        return None, None
+        return None, None, None
     
-
-    def convert_string_to_dt(s):
-        if s == '':
-            return pandas.NaT
-        else:
-            return datetime.datetime.fromisoformat(s)
+    # Return None, None if no trials
+    if np.sum(list(map(len, this_mouse_trial_data_l))) == 0:
+        print("no trials to load from protocol {} in {}".format(
+            protocol_name, h5_filename))
+        return None, None, None
+    
+    # Concat the results over protocols
+    mouse_trial_data = pandas.concat(
+        this_mouse_trial_data_l, keys=list_of_protocol_names, 
+        names=['protocol']).reset_index('protocol')
+    mouse_poke_data = pandas.concat(
+        this_mouse_poke_data_l, keys=list_of_protocol_names, 
+        names=['protocol']).reset_index('protocol')  
     
 
     ## Sometimes trials have a blank timestamp_trial_start
