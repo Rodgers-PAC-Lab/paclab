@@ -534,7 +534,7 @@ def load_data_from_single_hdf5(mouse_name, h5_filename,
             return pandas.NaT
         else:
             return datetime.datetime.fromisoformat(s)
-
+    
 
     ## Sometimes trials have a blank timestamp_trial_start
     # I think this only happens when it crashes right away
@@ -542,6 +542,13 @@ def load_data_from_single_hdf5(mouse_name, h5_filename,
     mouse_trial_data = mouse_trial_data[
         mouse_trial_data['timestamp_trial_start'] != b''].copy()
 
+
+    ## Sometimes there are pokes for sessions that don't exist in trial_data
+    # I think this only happens when there is a session with a single trial
+    # Include only pokes from loaded sessions
+    loaded_sessions = mouse_trial_data['session'].unique()
+    mouse_poke_data = mouse_poke_data.loc[loaded_sessions].copy()
+    
 
     ## Coerce dtypes for mouse_trial_data
     # Decode columns that are bytes
