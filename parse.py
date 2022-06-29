@@ -71,7 +71,7 @@ def parse_hdf5_files(path_to_terminal_data, mouse_names,
     """
     ## Load trial data and weights from the HDF5 files
     # This also drops munged sessions
-    session_df, trial_data, poke_data = load_data_from_all_mouse_hdf5(
+    session_df, trial_data, poke_data, sound_data = load_data_from_all_mouse_hdf5(
         mouse_names, munged_sessions=munged_sessions,
         path_to_terminal_data=path_to_terminal_data,
         rename_sessions_l=rename_sessions_l, protocol_name=protocol_name)
@@ -233,6 +233,7 @@ def parse_hdf5_files(path_to_terminal_data, mouse_names,
         'perf_metrics': perf_metrics,
         'trial_data': trial_data,
         'poke_data': poke_data,
+        'sound_data': sound_data,
         }
 
 def load_data_from_all_mouse_hdf5(mouse_names, munged_sessions,
@@ -304,6 +305,7 @@ def load_data_from_all_mouse_hdf5(mouse_names, munged_sessions,
     msd_l = []
     mtd_l = []
     mpd_l = []
+    mxd_l = []
     keys_l = []
     for mouse_name in mouse_names:
         # Form the hdf5 filename
@@ -312,7 +314,7 @@ def load_data_from_all_mouse_hdf5(mouse_names, munged_sessions,
             path_to_terminal_data, '{}.h5'.format(mouse_name))
         
         # Load data
-        mouse_session_df, mouse_trial_data, mouse_poke_data = (
+        mouse_session_df, mouse_trial_data, mouse_poke_data, mouse_sound_data = (
             load_data_from_single_hdf5(mouse_name, h5_filename, protocol_name))
         
         # Skip if None
@@ -327,6 +329,7 @@ def load_data_from_all_mouse_hdf5(mouse_names, munged_sessions,
         msd_l.append(mouse_session_df)
         mtd_l.append(mouse_trial_data)
         mpd_l.append(mouse_poke_data)
+        mxd_l.append(mouse_sound_data)
         keys_l.append(mouse_name)
     
     # Concatenate
@@ -336,6 +339,11 @@ def load_data_from_all_mouse_hdf5(mouse_names, munged_sessions,
         mtd_l, keys=keys_l, names=['mouse'], verify_integrity=True)
     poke_data = pandas.concat(
         mpd_l, keys=keys_l, names=['mouse'], verify_integrity=True)
+    try:
+        sound_data = pandas.concat(
+            mxd_l, keys=keys_l, names=['mouse'], verify_integrity=True)
+    except ValueError:
+        sound_data = None
 
     # Drop munged sessions
     droppable_sessions = []
@@ -411,7 +419,7 @@ def load_data_from_all_mouse_hdf5(mouse_names, munged_sessions,
         ['orig_session_num', 'box', 'date'], axis=1)
 
     # Return
-    return session_df, trial_data, poke_data
+    return session_df, trial_data, poke_data, sound_data
 
 def _parse_single_protocol_from_file(fi, this_protocol):
     """Load the trial data and continuous data from a single protocol
@@ -421,7 +429,7 @@ def _parse_single_protocol_from_file(fi, this_protocol):
     fi : open file handle
     this_protocol : name of protocol
     
-    Returns: mouse_trial_data, mouse_poke_data
+    Returns: mouse_trial_data, mouse_poke_data, mouse_sound_data
     """
     # Load trial_data and weights from HDF5 file
     mouse_trial_data = pandas.DataFrame(
@@ -431,8 +439,10 @@ def _parse_single_protocol_from_file(fi, this_protocol):
     session_num = 1
     session_pokes_l = []
     session_pokes_keys_l = []
+    session_sounds_l = []
+    session_sounds_keys_l = []
     while True:
-        # Load this session if it exists
+        ## Load this session if it exists, otherwise break out of loop
         try:
             session_node = (
                 fi.root['data'][this_protocol]['S00_PAFT'][
@@ -440,7 +450,30 @@ def _parse_single_protocol_from_file(fi, this_protocol):
         except IndexError:
             break
 
-        if 'poked_port' in session_node:
+        
+        ## Load sounds (if any)
+        if 'ChunkData_Sounds' in session_node:
+            # This is only for the new version of the data (2022-06-29)
+            sound_node = session_node['ChunkData_Sounds']
+            session_sound_data = pandas.DataFrame.from_records(sound_node[:])
+            
+            # Store
+            session_sounds_l.append(session_sound_data)
+            session_sounds_keys_l.append(session_num)
+    
+        
+        ## Load pokes
+        if 'ChunkData_Pokes' in session_node:
+            # This is the new version of the data (2022-06-29)
+            poke_node = session_node['ChunkData_Pokes']
+            session_poke_data = pandas.DataFrame.from_records(poke_node[:])
+            
+            # Store
+            session_pokes_l.append(session_poke_data)
+            session_pokes_keys_l.append(session_num)
+            
+        elif 'poked_port' in session_node:
+            # This is the old version of the data (pre 2022-06-29)
             # Load poked_port and trial
             session_poke_port = pandas.DataFrame(session_node['poked_port'][:])
             session_poke_trial = pandas.DataFrame(session_node['trial'][:])
@@ -457,9 +490,13 @@ def _parse_single_protocol_from_file(fi, this_protocol):
         else:
             # Empty session with no continuous data, probably
             # something went wrong
-            pass
+            print(
+                "munged continuous data in session "  
+                "{} in {}".format(session_num, fi.filename)
+                )
 
-        # Iterate
+        
+        ## Iterate
         session_num += 1
 
     # Concat pokes
@@ -470,7 +507,15 @@ def _parse_single_protocol_from_file(fi, this_protocol):
             session_pokes_l, keys=session_pokes_keys_l,
             names=['session', 'poke'])
     
-    return mouse_trial_data, mouse_poke_data
+    # Concat sounds
+    if len(session_sounds_l) == 0:
+        mouse_sound_data = None
+    else:
+        mouse_sound_data = pandas.concat(
+            session_sounds_l, keys=session_sounds_keys_l,
+            names=['session', 'sound'])    
+    
+    return mouse_trial_data, mouse_poke_data, mouse_sound_data
 
 def load_data_from_single_hdf5(mouse_name, h5_filename, 
     protocol_name='PAFT'):
@@ -549,6 +594,7 @@ def load_data_from_single_hdf5(mouse_name, h5_filename,
             # Iterate over protocol names and load each
             this_mouse_trial_data_l = []
             this_mouse_poke_data_l = []
+            this_mouse_sound_data_l = []
             for this_protocol in list_of_protocol_names:
                 # Load 
                 loaded = _parse_single_protocol_from_file(fi, this_protocol)
@@ -556,10 +602,12 @@ def load_data_from_single_hdf5(mouse_name, h5_filename,
                 # Parse
                 this_mouse_trial_data = loaded[0]
                 this_mouse_poke_data = loaded[1]
+                this_mouse_sound_data = loaded[2]
                 
                 # Store
                 this_mouse_trial_data_l.append(this_mouse_trial_data)
                 this_mouse_poke_data_l.append(this_mouse_poke_data)
+                this_mouse_sound_data_l.append(this_mouse_sound_data)
 
     except tables.HDF5ExtError:
         cannot_load = True
@@ -586,6 +634,12 @@ def load_data_from_single_hdf5(mouse_name, h5_filename,
     mouse_poke_data = pandas.concat(
         this_mouse_poke_data_l, keys=list_of_protocol_names, 
         names=['protocol']).reset_index('protocol')  
+    try:
+        mouse_sound_data = pandas.concat(
+            this_mouse_sound_data_l, keys=list_of_protocol_names, 
+            names=['protocol']).reset_index('protocol')  
+    except ValueError:
+        mouse_sound_data = None
     
 
     ## Sometimes trials have a blank timestamp_trial_start
@@ -600,6 +654,9 @@ def load_data_from_single_hdf5(mouse_name, h5_filename,
     # Include only pokes from loaded sessions
     loaded_sessions = mouse_trial_data['session'].unique()
     mouse_poke_data = mouse_poke_data.loc[loaded_sessions].copy()
+    if mouse_sound_data is not None:
+        mouse_sound_data = mouse_sound_data.reindex(
+            loaded_sessions, axis=0, level='session').copy()
     
 
     ## Coerce dtypes for mouse_trial_data
@@ -636,10 +693,27 @@ def load_data_from_single_hdf5(mouse_name, h5_filename,
             lambda s: datetime.datetime.fromisoformat(s)))
 
     # Coerce the columns that are boolean
-    bool_cols = []
+    bool_cols = ['first_poke', 'reward_delivered']
     for bool_col in bool_cols:
-        mouse_poke_data[bool_col] = mouse_poke_data[bool_col].replace(
-            {'True': True, 'False': False}).astype(bool)
+        try:
+            mouse_poke_data[bool_col] = mouse_poke_data[bool_col].replace(
+                {1: True, 0: False}).astype(bool)
+        except KeyError:
+            print("warning: missing bool_col {}".format(bool_col))
+
+
+    ## Coerce dtypes for mouse_sound_data
+    if mouse_sound_data is not None:
+        # Decode columns that are bytes
+        for decode_col in ['pilot', 'side', 'sound', 'locking_timestamp']:
+            mouse_sound_data[decode_col] = mouse_sound_data[
+                decode_col].str.decode('utf-8')
+
+        # Coerce timestamp to datetime
+        for timestamp_column in ['locking_timestamp']:
+            mouse_sound_data[timestamp_column] = (
+                mouse_sound_data[timestamp_column].apply(
+                lambda s: datetime.datetime.fromisoformat(s)))
     
     
     ## Coerce dtypes for mouse_weights
@@ -647,7 +721,8 @@ def load_data_from_single_hdf5(mouse_name, h5_filename,
     mouse_weights = mouse_weights.rename(columns={'date': 'date_string'})
     
     # Decode
-    mouse_weights['date_string'] = mouse_weights['date_string'].str.decode('utf-8')
+    mouse_weights['date_string'] = mouse_weights[
+        'date_string'].str.decode('utf-8')
 
     # Convert 'date_string' to Timestamp
     mouse_weights['dt_start'] = mouse_weights['date_string'].apply(
@@ -798,6 +873,9 @@ def load_data_from_single_hdf5(mouse_name, h5_filename,
     assert not mouse_poke_data['session_name'].isnull().any()
     
     
+    ## TODO: align unique session_name with mouse_sound_data
+    
+    
     ## Index everything by session_name and whatever else makes sense
     mouse_trial_data = mouse_trial_data.rename(
         columns={'trial_in_session': 'trial'})    
@@ -833,4 +911,4 @@ def load_data_from_single_hdf5(mouse_name, h5_filename,
     
     
     ## Return
-    return session_df, mouse_trial_data, mouse_poke_data
+    return session_df, mouse_trial_data, mouse_poke_data, mouse_sound_data
