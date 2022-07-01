@@ -463,7 +463,31 @@ def _parse_single_protocol_from_file(fi, this_protocol):
     
         
         ## Load pokes
-        if 'ChunkData_Pokes' in session_node:
+        if 'ChunkData_Pokes' in session_node and 'poked_port' in session_node:
+            # This only happens when something has gone wrong
+            # For instance, Subject deleted, then recreated, and now it
+            # is storing old data and new data in the same place.
+            # A workaround for now is just to load the old data
+            # This is copied from "elif 'poked_port' in session_node" below
+            print(
+                "warning: old and new poke data mixed together in session"
+                "{} in {}".format(session_num, fi.filename)
+                )
+            
+            # Load poked_port and trial
+            session_poke_port = pandas.DataFrame(session_node['poked_port'][:])
+            session_poke_trial = pandas.DataFrame(session_node['trial'][:])
+
+            # Stick them together
+            # TODO: check timestamps match
+            assert len(session_poke_port) == len(session_poke_trial)
+            session_poke_port['trial'] = session_poke_trial['trial']
+
+            # Store
+            session_pokes_l.append(session_poke_port)
+            session_pokes_keys_l.append(session_num)
+        
+        elif 'ChunkData_Pokes' in session_node:
             # This is the new version of the data (2022-06-29)
             poke_node = session_node['ChunkData_Pokes']
             session_poke_data = pandas.DataFrame.from_records(poke_node[:])
