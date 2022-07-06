@@ -434,21 +434,24 @@ def _parse_single_protocol_from_file(fi, this_protocol):
     # Load trial_data and weights from HDF5 file
     mouse_trial_data = pandas.DataFrame(
         fi.root['data'][this_protocol]['S00_PAFT']['trial_data'][:])
-   
-    # Get continuous_data from each session
+    
+    # Get the list of all the sessions for which we have continuous data
+    continuous_node = fi.root['data']['ControlTest220614']['S00_PAFT'][
+        'continuous_data']
+    continuous_session_names = list(continuous_node._v_children.keys())
+    
+    
+    ## Get continuous_data from each session
     session_num = 1
     session_pokes_l = []
     session_pokes_keys_l = []
     session_sounds_l = []
     session_sounds_keys_l = []
-    while True:
-        ## Load this session if it exists, otherwise break out of loop
-        try:
-            session_node = (
-                fi.root['data'][this_protocol]['S00_PAFT'][
-                'continuous_data']['session_{}'.format(session_num)])
-        except IndexError:
-            break
+    for session_name in continuous_session_names:
+    
+        ## Load this session
+        session_node = continuous_node[session_name]
+        session_num = int(session_name.split('_')[1])
 
         
         ## Load sounds (if any)
@@ -518,10 +521,6 @@ def _parse_single_protocol_from_file(fi, this_protocol):
                 "munged continuous data in session "  
                 "{} in {}".format(session_num, fi.filename)
                 )
-
-        
-        ## Iterate
-        session_num += 1
 
     # Concat pokes
     if len(session_pokes_l) == 0:
@@ -635,7 +634,7 @@ def load_data_from_single_hdf5(mouse_name, h5_filename,
 
     except tables.HDF5ExtError:
         cannot_load = True
-    
+
     # Return None, None if no protocols
     if len(list_of_protocol_names) == 0:
         print("no protocols to load in {}".format(h5_filename))
