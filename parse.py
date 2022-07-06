@@ -436,7 +436,7 @@ def _parse_single_protocol_from_file(fi, this_protocol):
         fi.root['data'][this_protocol]['S00_PAFT']['trial_data'][:])
     
     # Get the list of all the sessions for which we have continuous data
-    continuous_node = fi.root['data']['ControlTest220614']['S00_PAFT'][
+    continuous_node = fi.root['data'][this_protocol]['S00_PAFT'][
         'continuous_data']
     continuous_session_names = list(continuous_node._v_children.keys())
     
