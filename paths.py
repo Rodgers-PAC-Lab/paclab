@@ -38,6 +38,10 @@ def get_path_to_terminal_data():
         path_to_terminal_data = (
             '/home/mouse/mnt/cuttlefish/behavior/from_clownfish/autopilot'
             '/terminal/autopilot/data')
+    elif computer == 'jellyfish':
+        path_to_terminal_data = (
+            '/home/mouse/mnt/cuttlefish/behavior/from_clownfish/autopilot'
+            '/terminal/autopilot/data')            
     else:
         path_to_terminal_data = (
             '/home/rowan/mnt/cuttlefish/from_clownfish/autopilot'
