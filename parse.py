@@ -635,20 +635,20 @@ def load_data_from_single_hdf5(mouse_name, h5_filename,
     except tables.HDF5ExtError:
         cannot_load = True
 
-    # Return None, None if no protocols
-    if len(list_of_protocol_names) == 0:
-        print("no protocols to load in {}".format(h5_filename))
-    
     # Return None, None if loading error
     if cannot_load:
         print("cannot load {}".format(h5_filename))
-        return None, None, None
+        return None, None, None, None
     
     # Return None, None if no trials
     if np.sum(list(map(len, this_mouse_trial_data_l))) == 0:
         print("no trials to load from protocol {} in {}".format(
             protocol_name, h5_filename))
-        return None, None, None
+        return None, None, None, None
+    
+    # Return None, None if no protocols
+    if len(list_of_protocol_names) == 0:
+        print("no protocols to load in {}".format(h5_filename))
     
     # Concat the results over protocols
     mouse_trial_data = pandas.concat(
