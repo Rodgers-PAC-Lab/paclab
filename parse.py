@@ -651,16 +651,26 @@ def load_data_from_single_hdf5(mouse_name, h5_filename,
         print("no protocols to load in {}".format(h5_filename))
     
     # Concat the results over protocols
+    # mouse_trial_data has a level on the index that is like trial number,
+    # but I don't know if it's the same as the 'trial_num' or 'trial_in_session'
+    # column, so leaving it unlabeled for now.
     mouse_trial_data = pandas.concat(
         this_mouse_trial_data_l, keys=list_of_protocol_names, 
-        names=['protocol']).reset_index('protocol')
+        names=['protocol'])
     mouse_poke_data = pandas.concat(
         this_mouse_poke_data_l, keys=list_of_protocol_names, 
-        names=['protocol']).reset_index('protocol')  
+        names=['protocol'])
     try:
+        # mouse_sound_data can be missing data from before this was
+        # implemented, and that's okay
         mouse_sound_data = pandas.concat(
             this_mouse_sound_data_l, keys=list_of_protocol_names, 
-            names=['protocol']).reset_index('protocol')  
+            names=['protocol'])
+        
+        # Rename the column 'sound' which conflicts with index level 'sound'
+        mouse_sound_data = mouse_sound_data.rename(
+            columns={'sound': 'sound_type'})
+        
     except ValueError:
         mouse_sound_data = None
     
@@ -670,16 +680,6 @@ def load_data_from_single_hdf5(mouse_name, h5_filename,
     # Drop those trials, hopefully nothing else breaks
     mouse_trial_data = mouse_trial_data[
         mouse_trial_data['timestamp_trial_start'] != b''].copy()
-
-
-    ## Sometimes there are pokes for sessions that don't exist in trial_data
-    # I think this only happens when there is a session with a single trial
-    # Include only pokes from loaded sessions
-    loaded_sessions = mouse_trial_data['session'].unique()
-    mouse_poke_data = mouse_poke_data.loc[loaded_sessions].copy()
-    if mouse_sound_data is not None:
-        mouse_sound_data = mouse_sound_data.reindex(
-            loaded_sessions, axis=0, level='session').copy()
     
 
     ## Coerce dtypes for mouse_trial_data
@@ -728,7 +728,7 @@ def load_data_from_single_hdf5(mouse_name, h5_filename,
     ## Coerce dtypes for mouse_sound_data
     if mouse_sound_data is not None:
         # Decode columns that are bytes
-        for decode_col in ['pilot', 'side', 'sound', 'locking_timestamp']:
+        for decode_col in ['pilot', 'side', 'sound_type', 'locking_timestamp']:
             mouse_sound_data[decode_col] = mouse_sound_data[
                 decode_col].str.decode('utf-8')
 
@@ -791,21 +791,29 @@ def load_data_from_single_hdf5(mouse_name, h5_filename,
     mouse_poke_data.loc[box3_mask, 'box'] = 'Box3'
     assert mouse_poke_data['box'].isin(['Box1', 'Box2', 'Box3']).all()
     
-    
+
     ## Identify sessions
     # Sometimes the session number restarts numbering and I don't know why
     # Probably after every box change? Unclear
-    # Let's group by ['box', 'date', 'session'] and assume that each
-    # is unique. This could still fail if the renumbering happens without
-    # a box change, somehow.
+    # Session number definitely restarts after a protocol change
+    # Let's group by ['box', 'protocol', 'date', 'orig_session_num'] and assume that 
+    # each group represents a unique session. 
+    # This could still fail if the renumbering happens without a box or
+    # protocol change, somehow.
     # This will also fail if a session spans midnight
+
+    # Rename to be explicit
+    mouse_trial_data = mouse_trial_data.rename(
+        columns={'session': 'orig_session_num'})
     
     # First add a date string
     mouse_trial_data['date'] = mouse_trial_data['timestamp_trial_start'].apply(
         lambda dt: dt.date())
     
-    # Group by ['box', 'date', 'session']
-    gobj = mouse_trial_data.groupby(['box', 'date', 'session'])
+    # Group by ['box', 'protocol', 'date', 'orig_session_num']
+    # Assume each group is a unique session
+    gobj = mouse_trial_data.groupby(
+        ['box', 'protocol', 'date', 'orig_session_num'])
     
     # Extract times of first and last trials
     session_df = pandas.DataFrame.from_dict({
@@ -822,13 +830,8 @@ def load_data_from_single_hdf5(mouse_name, h5_filename,
     assert (
         session_df['approx_duration'] >= datetime.timedelta(seconds=0)).all()
     
-    # Reset index, and preserve the original session number
+    # Reset index
     session_df = session_df.reset_index()
-    session_df = session_df.rename(columns={'session': 'orig_session_num'})
-
-    # Extract the date of the session
-    session_df['date'] = session_df['first_trial'].apply(
-        lambda dt: dt.date())
 
     # Create a unique, sortable session name
     # This will generate a name like 20210907145607-Female4_0903-Box1
@@ -838,7 +841,7 @@ def load_data_from_single_hdf5(mouse_name, h5_filename,
         row['first_trial'].strftime('%Y%m%d%H%M%S'), mouse_name, row['box']),
         axis=1)
     
-    
+
     ## Align session_df with mouse_weights
     # The assumption here is that each is unique based on 
     # ['date', 'orig_session_num']. Otherwise this won't work.
@@ -863,40 +866,76 @@ def load_data_from_single_hdf5(mouse_name, h5_filename,
 
 
     ## Add the unique session_name to mouse_trial_data
-    # Get 'date' to align with session_df
-    # This will fail if the session crossed over midnight
-    mouse_trial_data['date'] = mouse_trial_data['timestamp_trial_start'].apply(
-        lambda dt: dt.date())
-    mouse_trial_data = mouse_trial_data.rename(
-        columns={'session': 'orig_session_num'})
-    
     # Align on these columns which should uniquely defined
-    join_on = ['box', 'date', 'orig_session_num']
+    join_on = ['box', 'protocol', 'date', 'orig_session_num']
     mouse_trial_data = mouse_trial_data.join(
         session_df.set_index(join_on)['session_name'],
         on=join_on)
     assert not mouse_trial_data['session_name'].isnull().any()
-    
+
 
     ## Add the unique session_name to mouse_poke_data
     mouse_poke_data = mouse_poke_data.reset_index()
     
     # Get 'date' to align with session_df
-    # This will fail if the session crossed over midnight
     mouse_poke_data['date'] = mouse_poke_data['timestamp'].apply(
         lambda dt: dt.date())
     mouse_poke_data = mouse_poke_data.rename(
         columns={'session': 'orig_session_num'})
     
     # Align on these columns which should uniquely defined
-    join_on = ['box', 'date', 'orig_session_num']
+    join_on = ['box', 'protocol', 'date', 'orig_session_num']
     mouse_poke_data = mouse_poke_data.join(
         session_df.set_index(join_on)['session_name'],
         on=join_on)
+    
+    # Drop any pokes here that are unaligned with sessions
+    # This can happen if a session consisted only of one uncompleted trial
+    to_drop = mouse_poke_data['session_name'].isnull()
+    if to_drop.sum() > 0:
+        pokes_to_drop = mouse_poke_data.loc[to_drop]
+        dates_with_unaligned_pokes = ', '.join(
+            map(str, pokes_to_drop['date'].unique()))
+        print(
+            "warning: dropping " 
+            "{} unaligned pokes on dates {} from mouse {}".format(
+            len(pokes_to_drop),
+            mouse_name,
+            dates_with_unaligned_pokes))
+        mouse_poke_data = mouse_poke_data.loc[~to_drop].copy()
     assert not mouse_poke_data['session_name'].isnull().any()
+
     
+    ## Add the unique session_name to mouse_sound_data
+    mouse_sound_data = mouse_sound_data.reset_index()
     
-    ## TODO: align unique session_name with mouse_sound_data
+    # Get 'date' to align with session_df
+    mouse_sound_data['date'] = mouse_sound_data['locking_timestamp'].apply(
+        lambda dt: dt.date())
+    mouse_sound_data = mouse_sound_data.rename(
+        columns={'session': 'orig_session_num'})
+    
+    # Align on these columns which should uniquely defined
+    join_on = ['protocol', 'date', 'orig_session_num']
+    mouse_sound_data = mouse_sound_data.join(
+        session_df.set_index(join_on)['session_name'],
+        on=join_on)
+    
+    # Drop any sounds  here that are unaligned with sessions
+    # This can happen if a session consisted only of one uncompleted trial
+    to_drop = mouse_sound_data['session_name'].isnull()
+    if to_drop.sum() > 0:
+        sounds_to_drop = mouse_sound_data.loc[to_drop]
+        dates_with_unaligned_sounds = ', '.join(
+            map(str, sounds_to_drop['date'].unique()))
+        print(
+            "warning: dropping " 
+            "{} unaligned sounds on dates {} from mouse {}".format(
+            len(sounds_to_drop),
+            mouse_name,
+            dates_with_unaligned_sounds))
+        mouse_sound_data = mouse_sound_data.loc[~to_drop].copy()
+    assert not mouse_sound_data['session_name'].isnull().any()
     
     
     ## Index everything by session_name and whatever else makes sense
@@ -916,20 +955,26 @@ def load_data_from_single_hdf5(mouse_name, h5_filename,
             ~mouse_trial_data['session_name'].isin(dup_sessions)].copy()
     
     # Set index
-    mouse_trial_data = mouse_trial_data.set_index(
+    # This is where we drop the unlabeled level of the index that was
+    # kind of like 'trial', replacing it with the more explicit 'trial'
+    mouse_trial_data = mouse_trial_data.reset_index('protocol').set_index(
         ['session_name', 'trial'])
     mouse_poke_data = mouse_poke_data.set_index(
         ['session_name', 'trial', 'poke'])
+    mouse_sound_data = mouse_sound_data.set_index(
+        ['session_name', 'sound'])        
     session_df = session_df.set_index('session_name')
     
     # Sort index
     mouse_trial_data = mouse_trial_data.sort_index()
     mouse_poke_data = mouse_poke_data.sort_index()
+    mouse_sound_data = mouse_sound_data.sort_index()
     session_df = session_df.sort_index()
 
     # Error check
     assert not session_df.index.duplicated().any()
     assert not mouse_trial_data.duplicated().any()
+    assert not mouse_sound_data.duplicated().any()
     assert not mouse_poke_data.duplicated().any()
     
     
