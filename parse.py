@@ -8,6 +8,7 @@ import pandas
 def parse_hdf5_files(path_to_terminal_data, mouse_names, 
     munged_sessions=None,
     rename_sessions_l=None,
+    rename_mouse_d=None,
     protocol_name='PAFT'):
     """Load the data from the specified mice, clean, and return.
     
@@ -33,6 +34,11 @@ def parse_hdf5_files(path_to_terminal_data, mouse_names,
             '20220309115351-F2_PAFT-Box2', 
             'F2_PAFT',)        
     
+    rename_mouse_d : dict or None
+        If None, no renaming is done
+        Otherwise, for each (key, value) pair, rename the mouse named
+        "key" to "value".     
+
     protocol_name : string
         This is the protocol to load from the HDF5 file. 
     
@@ -74,7 +80,9 @@ def parse_hdf5_files(path_to_terminal_data, mouse_names,
     session_df, trial_data, poke_data, sound_data = load_data_from_all_mouse_hdf5(
         mouse_names, munged_sessions=munged_sessions,
         path_to_terminal_data=path_to_terminal_data,
-        rename_sessions_l=rename_sessions_l, protocol_name=protocol_name)
+        rename_sessions_l=rename_sessions_l, 
+        rename_mouse_d=rename_mouse_d,
+        protocol_name=protocol_name)
 
     # Drop useless columns
     poke_data = poke_data.drop(['orig_session_num', 'date'], axis=1)
@@ -237,7 +245,7 @@ def parse_hdf5_files(path_to_terminal_data, mouse_names,
         }
 
 def load_data_from_all_mouse_hdf5(mouse_names, munged_sessions,
-    path_to_terminal_data, rename_sessions_l=None,
+    path_to_terminal_data, rename_sessions_l=None, rename_mouse_d=None,
     protocol_name='PAFT'):
     """Load trial data and weights from HDF5 files for all mice
     
@@ -267,6 +275,10 @@ def load_data_from_all_mouse_hdf5(mouse_names, munged_sessions,
                 ('20220309115351-M2_PAFT-Box2', 
                 '20220309115351-F2_PAFT-Box2', 
                 'F2_PAFT',)
+        rename_mouse_d : dict or None
+            If None, no renaming is done
+            Otherwise, for each (key, value) pair, rename the mouse named
+            "key" to "value". 
         protocol_name : string
             The protocol name to load from the file
     
@@ -357,6 +369,9 @@ def load_data_from_all_mouse_hdf5(mouse_names, munged_sessions,
         session_df = session_df.drop(droppable_sessions, level='session_name')
         trial_data = trial_data.drop(droppable_sessions, level='session_name')
         poke_data = poke_data.drop(droppable_sessions, level='session_name')
+        
+        if sound_data is not None:
+            sound_data = sound_data.drop(droppable_sessions, level='session_name')
 
 
     ## Rename sessions that were saved by the wrong mouse name
@@ -365,6 +380,8 @@ def load_data_from_all_mouse_hdf5(mouse_names, munged_sessions,
         trial_data = trial_data.reset_index()
         poke_data = poke_data.reset_index()
         session_df = session_df.reset_index()
+        if sound_data is not None:
+            sound_data = sound_data.reset_index()
         
         # fix
         for wrong_name, right_name, right_mouse in rename_sessions_l:
@@ -378,6 +395,11 @@ def load_data_from_all_mouse_hdf5(mouse_names, munged_sessions,
             poke_data.loc[bad_mask, 'session_name'] = right_name
             poke_data.loc[bad_mask, 'mouse'] = right_mouse            
 
+            # Fix sound_data
+            bad_mask = sound_data['session_name'] == wrong_name
+            sound_data.loc[bad_mask, 'session_name'] = right_name
+            sound_data.loc[bad_mask, 'mouse'] = right_mouse            
+
             # Fix session_df
             bad_mask = session_df['session_name'] == wrong_name
             session_df.loc[bad_mask, 'session_name'] = right_name
@@ -388,8 +410,23 @@ def load_data_from_all_mouse_hdf5(mouse_names, munged_sessions,
             ['mouse', 'session_name', 'trial']).sort_index()
         poke_data = poke_data.set_index(
             ['mouse', 'session_name', 'trial', 'poke']).sort_index()            
+        sound_data = sound_data.set_index(
+            ['mouse', 'session_name', 'sound']).sort_index()   
         session_df = session_df.set_index(
             ['mouse', 'session_name']).sort_index()
+
+
+    ## Rename mice here
+    if rename_mouse_d is not None:
+        trial_data = trial_data.rename(
+            index=rename_mouse_d, level='mouse').sort_index()
+        poke_data = poke_data.rename(
+            index=rename_mouse_d, level='mouse').sort_index()
+        session_df = session_df.rename( 
+            index=rename_mouse_d, level='mouse').sort_index()
+        if sound_data is not None:
+            sound_data = sound_data.rename(
+                index=rename_mouse_d, level='mouse').sort_index()
 
 
     ## Error check only one session per mouse per day
