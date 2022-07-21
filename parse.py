@@ -371,7 +371,9 @@ def load_data_from_all_mouse_hdf5(mouse_names, munged_sessions,
         poke_data = poke_data.drop(droppable_sessions, level='session_name')
         
         if sound_data is not None:
-            sound_data = sound_data.drop(droppable_sessions, level='session_name')
+            # Ignore errors here because not all sessions have sound_data
+            sound_data = sound_data.drop(
+                droppable_sessions, level='session_name', errors='ignore')
 
 
     ## Rename sessions that were saved by the wrong mouse name
