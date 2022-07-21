@@ -843,7 +843,14 @@ def load_data_from_single_hdf5(mouse_name, h5_filename,
     # The assumption here is that each is unique based on 
     # ['date', 'orig_session_num']. Otherwise this won't work.
     assert not session_df[['date', 'orig_session_num']].duplicated().any()
-    assert not mouse_weights[['date', 'orig_session_num']].duplicated().any()
+    
+    # Check for duplicates in mouse_weights
+    dup_check = mouse_weights[['date', 'orig_session_num']].duplicated() 
+    if dup_check.any():
+        raise ValueError("duplicate sessions in {} mouse_weights on {}".format(
+            mouse_name,
+            ", ".join(map(str, mouse_weights.loc[dup_check, 'date'].values))
+            ))
 
     # Rename the weights columns to be more meaningful after merge
     mouse_weights = mouse_weights.rename(columns={
