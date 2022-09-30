@@ -4,6 +4,556 @@ import os
 import numpy as np
 import tables
 import pandas
+import glob
+import json
+
+def parse_sandboxes(
+    path_to_terminal_data, 
+    mouse_names=None, 
+    munged_sessions=None,
+    rename_sessions_l=None,
+    rename_mouse_d=None,
+    protocol_name='PAFT'):
+    """Load the data from the specified mice, clean, and return.
+    
+    This is a replacement of parse_hdf_files now that data is stored
+    for each session in its own "sandbox" instead of in a global mouse HDF5
+    file.
+    
+    path_to_terminal_data : string
+        The path to Autopilot data. Can be gotten from
+        paclab.paths.get_path_to_terminal_data()
+    
+    mouse_names : list of string, or None
+        A list of mouse names to load
+        If None, all mice are loaded.
+    
+    munged_sessions : list of string
+        A list of session names to drop
+    
+    rename_sessions_l : list, or None
+        If None, no renaming is done.
+        Otherwise, each item in the list is a tuple of length 3
+        Each tuple consists of (
+            the session_name the file was saved as,
+            the session_name it should have been saved as,
+            the name of the actual mouse that was tested)
+        Example:
+            ('20220309115351-M2_PAFT-Box2', 
+            '20220309115351-F2_PAFT-Box2', 
+            'F2_PAFT',)        
+    
+    rename_mouse_d : dict or None
+        If None, no renaming is done
+        Otherwise, for each (key, value) pair, rename the mouse named
+        "key" to "value".     
+
+    protocol_name : string
+        This is the protocol to load from the HDF5 file. 
+    
+    This function:
+    * Loads data from sandboxes specified by mouse_names
+    * Adds useful columns like t_wrt_start, rewarded_port, etc to pokes
+    * Label the type of each poke as "correct", "error", "prev"
+    * Label the outcome of the trial as the type of the first poke in that trial
+    * Score sessions by fraction correct, rank of correct port
+    * Calculated performance metrics over all sessions
+    
+    Returns: dict, with the following items
+        'perf_metrics': DataFrame
+            Performance metrics for each session
+            Index: MultiIndex with levels mouse, date
+            Columns: session_name, rcp, fc, n_trials
+    
+        'session_df' : DataFrame
+            Metadata about each session
+            Index: MultiIndex with levels mouse, session_name
+            Columns: box, date, 
+                n_trials, approx_duration, weight,
+                task_type, pilot, protocol_name, task_class_name, camera_name,
+                sandbox_creation_time, and all of the task parameters from
+                the protocol file
+            TODO: 
+                add "box"
+                split task_parameters into a different variable
+        
+        'trial_data': DataFrame
+            Metadata about each trial
+            Index: MultiIndex with levels mouse, session_name, trial
+            Columns: previously_rewarded_port, rewarded_port, timestamp_reward,
+                trial_start, duration, n_pokes, correct, error, prev, 
+                outcome, rcp, and all trial parameters
+            TODO:
+                split trial_parameters into a different variable
+        
+        'poke_data': DataFrame
+            Metadata about each poke
+            Index: MultiIndex with levels mouse, session_name, trial, poke
+            Columns: poked_port, timestamp, trial_start, t_wrt_start, 
+                rewarded_port, previously_rewarded_port, poke_type,
+                poke_rank, reward_delivered
+            
+            TODO:
+                add "trial" as a level on the index
+    """
+    ## Get list of available sandboxes
+    sandbox_root_dir = os.path.join(path_to_terminal_data, 'sandboxes')
+    sandbox_dir_l = sorted(
+        map(os.path.abspath, glob.glob(os.path.join(sandbox_root_dir, '*/'))))
+
+    
+    ## Iterate over sandboxes
+    # Create lists to store data
+    trial_data_l = []
+    poke_data_l = []
+    sound_data_l = []
+    sandbox_params_l = []
+    task_params_l = []
+    keys_l = []
+    skipped_for_no_trials = []
+    skipped_for_no_pokes = []
+    all_encountered_mouse_names = []
+
+    # Iterate over sandboxes
+    for sandbox_dir in sandbox_dir_l:
+        ## Parse sandbox names
+        # Get sandbox name
+        sandbox_name = os.path.split(sandbox_dir)[1]
+        
+        # Get datetime and mouse_name from sandbox_name
+        sandbox_dt_string = sandbox_name[:26]
+        mouse_name = sandbox_name[27:]
+        
+        # Keep track of all mice encountered
+        if mouse_name not in all_encountered_mouse_names:
+            all_encountered_mouse_names.append(mouse_name)
+        
+        # Continue if mouse_name not needed
+        if mouse_names is not None and mouse_name not in mouse_names:
+            continue
+        
+        # Continue if munged
+        if munged_sessions is not None and sandbox_name in munged_sessions:
+            continue
+        
+        # Get HDF5 filename
+        hdf5_filename_l = glob.glob(os.path.join(sandbox_dir, '*.hdf5'))
+        assert len(hdf5_filename_l) == 1
+        hdf5_filename = hdf5_filename_l[0]
+        
+        
+        ## Load json files
+        with open(os.path.join(sandbox_dir, 'sandbox_params.json')) as fi:
+            sandbox_params = json.load(fi)
+
+        with open(os.path.join(sandbox_dir, 'task_params.json')) as fi:
+            task_params = json.load(fi)
+        
+        # Pop this one which is always an empty dict
+        task_params.pop('graduation')
+        
+        
+        ## Skip PokeTrain
+        # TODO: Figure out why some PokeTrain sessions have >100K pokes
+        if task_params['task_type'] != protocol_name:
+            continue
+        
+        
+        ## Load data from hdf5 file
+        with tables.open_file(hdf5_filename) as fi:
+            # Load trial data 
+            trial_data = pandas.DataFrame.from_records(
+                fi.root['trial_data'].read())
+            
+            # Load poke data
+            poke_data = pandas.DataFrame.from_records(
+                fi.root['continuous_data']['ChunkData_Pokes'].read())
+            
+            # Load sound data, or None if doesn't exist (e.g, poketrain)
+            try:
+                sound_data = pandas.DataFrame.from_records(
+                    fi.root['continuous_data']['ChunkData_Sounds'].read())
+            except IndexError:
+                sound_data = None
+
+
+        ## Sometimes trials have a blank timestamp_trial_start
+        # I think this only happens when it crashes right away
+        # Drop those trials, hopefully nothing else breaks
+        # Check if this is still happening
+        trial_data = trial_data[
+            trial_data['timestamp_trial_start'] != b''].copy()
+        
+
+        ## Drop this one that we never care about
+        trial_data = trial_data.drop('trial_num', axis=1)
+        
+        
+        ## Check for duplicated, missing or extraneous trials
+        # This is which trials we *should* find
+        correct_range = np.array(
+            range(trial_data['trial_in_session'].max() + 1))
+        
+        # These are trials that were found, but should not be there
+        # I don't think this is actually possible unless there are negative
+        # trial numbers
+        extraneous_trials_mask = ~np.isin(
+            trial_data['trial_in_session'].values, correct_range)
+        
+        if np.any(extraneous_trials_mask):
+            print('warning: {} has extraneous trials: {}'.format(
+                sandbox_name,
+                trial_data['trial_in_session'].values[extraneous_trials_mask]))
+
+        # These are trials that were not found, but should have been
+        trials_not_found_mask = ~np.isin(
+            correct_range, trial_data['trial_in_session'].values)
+        
+        if np.any(trials_not_found_mask):
+            print('warning: {} has missing trials: {}'.format(
+                sandbox_name,
+                correct_range[trials_not_found_mask]))            
+
+        # These are trial numbers that occurred more than once
+        duplicate_trials_mask = trial_data['trial_in_session'].duplicated()
+        
+        if np.any(duplicate_trials_mask):
+            print('warning: {} has duplicate trials: {}'.format(
+                sandbox_name,
+                trial_data['trial_in_session'].values[duplicate_trials_mask],
+                ))
+        
+        
+        ## Skip sessions with no pokes or no trials
+        if len(trial_data) == 0:
+            skipped_for_no_trials.append(sandbox_name)
+            continue
+        if len(poke_data) == 0:
+            skipped_for_no_pokes.append(sandbox_name)
+            continue
+
+
+        ## Coerce dtypes for trial_data
+        # Decode columns that are bytes
+        for decode_col in ['previously_rewarded_port', 'rewarded_port', 
+                'timestamp_reward', 'timestamp_trial_start', 'group']:
+            trial_data[decode_col] = (
+                trial_data[decode_col].str.decode('utf-8')
+                )
+
+        # Coerce timestamp to datetime
+        for timestamp_column in ['timestamp_reward', 'timestamp_trial_start']:
+            trial_data[timestamp_column] = (
+                trial_data[timestamp_column].apply(
+                lambda s: datetime.datetime.fromisoformat(s)))
+
+        # Coerce the columns that are boolean
+        bool_cols = []
+        for bool_col in bool_cols:
+            trial_data[bool_col] = trial_data[bool_col].replace(
+                {'True': True, 'False': False}).astype(bool)
+
+        
+        ## Coerce dtypes for poke_data
+        # Decode columns that are bytes
+        for decode_col in ['poked_port', 'timestamp']:
+            poke_data[decode_col] = poke_data[
+                decode_col].str.decode('utf-8')
+
+        # Coerce timestamp to datetime
+        for timestamp_column in ['timestamp']:
+            poke_data[timestamp_column] = (
+                poke_data[timestamp_column].apply(
+                lambda s: datetime.datetime.fromisoformat(s)))
+
+        # Coerce the columns that are boolean
+        bool_cols = ['first_poke', 'reward_delivered']
+        for bool_col in bool_cols:
+            try:
+                poke_data[bool_col] = poke_data[bool_col].replace(
+                    {1: True, 0: False}).astype(bool)
+            except KeyError:
+                print("warning: missing bool_col {}".format(bool_col))
+        
+
+        ## Coerce dtypes for sound_data
+        if sound_data is not None:
+            # Rename the column 'sound' which conflicts with index level 'sound'
+            sound_data = sound_data.rename(
+                columns={'sound': 'sound_type'})        
+            
+            # Decode columns that are bytes
+            for decode_col in ['pilot', 'side', 'sound_type', 'locking_timestamp']:
+                sound_data[decode_col] = sound_data[
+                    decode_col].str.decode('utf-8')
+
+            # Coerce timestamp to datetime
+            for timestamp_column in ['locking_timestamp']:
+                sound_data[timestamp_column] = (
+                    sound_data[timestamp_column].apply(
+                    lambda s: datetime.datetime.fromisoformat(s)))
+
+
+        ## Append
+        trial_data_l.append(trial_data)
+        poke_data_l.append(poke_data)
+        sound_data_l.append(sound_data)
+        sandbox_params_l.append(sandbox_params)
+        task_params_l.append(task_params)
+        keys_l.append((mouse_name, sandbox_name))
+
+
+    ## Warn about skipped sessions
+    if len(skipped_for_no_trials) > 0:
+        print(
+            "warning: skipped the following sessions with zero trials, "
+            "these should be added to 'munged_sessions:'")
+        for session_name in skipped_for_no_trials:
+            print('"{}",'.format(session_name))
+        print()
+    
+    if len(skipped_for_no_pokes) > 0:
+        print(
+            "warning: skipped the following sessions with zero pokes, "
+            "these should be added to 'munged_sessions:'")
+        for session_name in skipped_for_no_pokes:
+            print('"{}",'.format(session_name))
+        print()
+
+
+    ## Warn if no mice found
+    if mouse_names is not None:
+        missing_mice = []
+        for mouse in mouse_names:
+            if mouse not in all_encountered_mouse_names:
+                missing_mice.append(mouse)
+        if len(missing_mice) > 0:
+            print("warning: the following mice were not found:")
+            print("\n".join(missing_mice))
+            print()
+            print("did you mean one of the following?")
+            print(", ".join(sorted(all_encountered_mouse_names)))
+            print()
+    
+
+    ## Error if no sessions found
+    if len(sandbox_params_l) == 0:
+        raise ValueError(
+            "no sandboxes found! either the data cannot be loaded, or "
+            "none of your requested mice could be found")
+    
+
+    ## Concat
+    big_trial_df = pandas.concat(
+        trial_data_l, keys=keys_l, names=['mouse', 'session_name', 'trial'])
+    big_poke_df = pandas.concat(
+        poke_data_l, keys=keys_l, names=['mouse', 'session_name', 'poke'])
+    big_sound_df = pandas.concat(
+        sound_data_l, keys=keys_l, names=['mouse', 'session_name', 'sound'])
+    big_task_params = pandas.DataFrame.from_records(task_params_l,
+        index=pandas.MultiIndex.from_tuples(keys_l, names=['mouse', 'session_name']))
+    big_sandbox_params = pandas.DataFrame.from_records(sandbox_params_l,
+        index=pandas.MultiIndex.from_tuples(keys_l, names=['mouse', 'session_name']))
+    big_session_params = pandas.concat(
+        [big_task_params, big_sandbox_params], axis=1, verify_integrity=True)
+
+
+    ## Parse big_session_params
+    # add 'date' to big_session_params
+    big_session_params['date'] = [datetime.date.fromisoformat(s[:10]) 
+        for s in big_session_params.index.get_level_values('session_name').values]
+    
+    # Add trial quantifications to big_session_params
+    big_session_params['n_trials'] = big_trial_df.groupby(
+        ['mouse', 'session_name']).size()
+    big_session_params['first_trial'] = big_trial_df.groupby(
+        ['mouse', 'session_name'])[
+        'timestamp_trial_start'].min()
+    big_session_params['last_trial'] = big_trial_df.groupby(
+        ['mouse', 'session_name'])[
+        'timestamp_trial_start'].max()
+    big_session_params['approx_duration'] = (
+        big_session_params['last_trial'] - big_session_params['first_trial'])
+
+
+    ## Parse trial data further
+    # Rename
+    big_trial_df = big_trial_df.rename(columns={'timestamp_trial_start': 'trial_start'})
+
+    # Drop, not sure what this is supposed to be
+    big_trial_df = big_trial_df.drop('group', axis=1)
+
+    # Drop, these are not relevant
+    big_trial_df = big_trial_df.drop(['session', 'session_uuid'], axis=1)
+
+    # Add duration
+    big_trial_df['duration'] = (
+        big_trial_df['trial_start'].shift(-1) - big_trial_df['trial_start']).apply(
+        lambda ts: ts.total_seconds())
+
+
+    ## Add columns to big_trial_df, and calculate t_wrt_start for pokes
+    # Join 'trial_start' onto big_poke_df
+    big_poke_df = big_poke_df.join(big_trial_df['trial_start'], on=['mouse', 'session_name', 'trial'])
+
+    # Drop pokes without a matching trial start
+    # TODO: Look into why this is happening -- is it only before first trial 
+    # and on last trial or what?
+    big_poke_df = big_poke_df[~big_poke_df['trial_start'].isnull()].copy()
+
+    # Normalize poke time to trial start time
+    big_poke_df['t_wrt_start'] = big_poke_df['timestamp'] - big_poke_df['trial_start']
+    big_poke_df['t_wrt_start'] = big_poke_df['t_wrt_start'].apply(
+        lambda ts: ts.total_seconds())
+
+
+    ## Join rewarded_port and previously_rewarded_port on pokes
+    big_poke_df = big_poke_df.join(
+        big_trial_df[['rewarded_port', 'previously_rewarded_port']],
+        on=['mouse', 'session_name', 'trial'],
+        rsuffix='_correct')
+
+    # Actually don't do this because then it looks like no pokes on this trial
+    #~ # Drop big_poke_df rows where previously_rewarded_port is ''
+    #~ # TODO: Check that this is only the first trial in a session
+    #~ # TODO: first trial should be 0 not 1
+    #~ big_poke_df = big_poke_df[big_poke_df['previously_rewarded_port'] != ''].copy()
+
+    # Add trial to the index
+    big_poke_df = big_poke_df.set_index('trial', append=True).reorder_levels(
+        ['mouse', 'session_name', 'trial', 'poke']).sort_index()
+
+
+    ## Label the type of each poke
+    # target port is 'correct'
+    # prev_target port is 'prev' (presumably consumptive)
+    # all others (currently only one other type) is 'error'
+    big_poke_df['poke_type'] = 'error'
+    big_poke_df.loc[
+        big_poke_df['poked_port'] == big_poke_df['rewarded_port'],
+        'poke_type'] = 'correct'
+    big_poke_df.loc[
+        big_poke_df['poked_port'] == big_poke_df['previously_rewarded_port'],
+        'poke_type'] = 'prev'
+
+
+    ## Count pokes per trial and check there was at least 1 on every trial
+    n_pokes = big_poke_df.groupby(
+        ['mouse', 'session_name', 'trial']).size().rename('n_pokes')
+    big_trial_df = big_trial_df.join(n_pokes)
+    #~ assert not big_trial_df['n_pokes'].isnull().any()
+
+    # TODO figure out why this is sometimes null
+    big_trial_df = big_trial_df[~big_trial_df['n_pokes'].isnull()].copy()
+    big_trial_df['n_pokes'] = big_trial_df['n_pokes'].astype(int)
+
+    # It should never be zero, it would have been null if so
+    assert (big_trial_df['n_pokes'] > 0).all()
+
+
+    ## Debug there is always a correct poke
+    n_poke_types_by_trial = big_poke_df.groupby(
+        ['mouse', 'session_name', 'trial'])['poke_type'].value_counts().unstack(
+        'poke_type').fillna(0).astype(int)
+    assert len(big_trial_df) == len(n_poke_types_by_trial)
+
+    # TODO: this is not working, figure out why
+    #assert (n_poke_types_by_trial['correct'] > 0).all()
+
+
+    ## Label the outcome of each trial, based on the type of the first poke
+    # time of first poke of each type
+    first_poke = big_poke_df.reset_index().groupby(
+        ['mouse', 'session_name', 'trial', 'poke_type']
+        )['t_wrt_start'].min().unstack('poke_type')
+
+    # Join
+    big_trial_df = big_trial_df.join(first_poke)
+
+    # Score by first poke (excluding prev)
+    trial_outcome = big_trial_df[['correct', 'error']].idxmin(1)
+    big_trial_df['outcome'] = trial_outcome
+
+
+    ## Label trials by how many ports poked before correct
+    # Get the latency to each port on each trial
+    latency_by_port = big_poke_df.reset_index().groupby(
+        ['mouse', 'session_name', 'trial', 'poked_port'])['t_wrt_start'].min()
+
+    # Drop the consumption port (previous reward)
+    consumption_port = big_trial_df[
+        'previously_rewarded_port'].dropna().reset_index().rename(
+        columns={'previously_rewarded_port': 'poked_port'})
+    cp_idx = pandas.MultiIndex.from_frame(consumption_port)
+    latency_by_port_dropped = latency_by_port.drop(cp_idx, errors='ignore')
+
+    # Unstack the port onto columns
+    lbpd_unstacked = latency_by_port_dropped.unstack('poked_port')
+
+    # Rank them in order of poking
+    # Subtract 1 because it starts with 1
+    # The best is 0 (correct trial) and the worst is 6 (because consumption port
+    # is ignored). The expectation under random choices is 3 (right??)
+    lbpd_ranked = lbpd_unstacked.rank(
+        method='first', axis=1).stack().astype(int) - 1
+
+    # TODO: figure out why rcp is sometimes 7 here
+
+    # Find the rank of the correct port
+    correct_port = big_trial_df['rewarded_port'].dropna().reset_index()
+    cp_idx = pandas.MultiIndex.from_frame(correct_port)
+    rank_of_correct_port = lbpd_ranked.reindex(
+        cp_idx).droplevel('rewarded_port').rename('rcp')
+
+    # Append this to big_big_trial_df
+    big_trial_df = big_trial_df.join(rank_of_correct_port)
+
+    # Error check
+    # TODO: figure out why this is not working
+    #~ assert not big_trial_df['rcp'].isnull().any()
+
+
+    ## Score sessions by fraction correct
+    scored_by_fraction_correct = big_trial_df.groupby(
+        ['mouse', 'session_name'])[
+        'outcome'].value_counts().unstack('outcome')
+    scored_by_fraction_correct['perf'] = (
+        scored_by_fraction_correct['correct'].divide(
+        scored_by_fraction_correct.sum(axis=1)))
+
+
+    ## Score sessions by n_trials
+    scored_by_n_trials = big_trial_df.groupby(['mouse', 'session_name']).size()
+
+
+    ## Score by n_ports
+    scored_by_n_ports = big_trial_df.groupby(['mouse', 'session_name'])['rcp'].mean()
+
+
+    ## Extract key performance metrics
+    # This slices out sound-only trials
+    perf_metrics = pandas.concat([
+        scored_by_n_ports.rename('rcp'),
+        scored_by_fraction_correct['perf'].rename('fc'),
+        scored_by_n_trials.rename('n_trials'),
+        ], axis=1, verify_integrity=True)
+
+    # Join date
+    perf_metrics = perf_metrics.join(big_session_params['date'], on=['mouse', 'session_name'])
+
+    #~ # Keep the session with the most trials by date
+    #~ perf_metrics = perf_metrics.groupby(['mouse', 'date']).apply(
+        #~ lambda df: df.sort_values('n_trials').iloc[-1])
+    
+    
+    ## Return
+    return {
+        'session_df': big_session_params,
+        'perf_metrics': perf_metrics,
+        'trial_data': big_trial_df,
+        'poke_data': big_poke_df,
+        'sound_data': big_sound_df,
+        }
 
 def parse_hdf5_files(path_to_terminal_data, mouse_names, 
     munged_sessions=None,
