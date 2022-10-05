@@ -187,6 +187,15 @@ def parse_sandboxes(
 
         ## Drop this one that we never care about
         trial_data = trial_data.drop('trial_num', axis=1)
+
+
+        ## Skip sessions with no pokes or no trials
+        if len(trial_data) == 0:
+            skipped_for_no_trials.append(sandbox_name)
+            continue
+        if len(poke_data) == 0:
+            skipped_for_no_pokes.append(sandbox_name)
+            continue
         
         
         ## Check for duplicated, missing or extraneous trials
@@ -224,15 +233,6 @@ def parse_sandboxes(
                 ))
         
         
-        ## Skip sessions with no pokes or no trials
-        if len(trial_data) == 0:
-            skipped_for_no_trials.append(sandbox_name)
-            continue
-        if len(poke_data) == 0:
-            skipped_for_no_pokes.append(sandbox_name)
-            continue
-
-
         ## Coerce dtypes for trial_data
         # Decode columns that are bytes
         for decode_col in ['previously_rewarded_port', 'rewarded_port', 
