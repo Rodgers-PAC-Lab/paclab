@@ -637,7 +637,9 @@ def parse_hdf5_files(path_to_terminal_data, mouse_names,
     # Drop useless columns
     poke_data = poke_data.drop(['orig_session_num', 'date'], axis=1)
     trial_data = trial_data.drop('trial_num', axis=1)
-    session_df = session_df.drop('stop', axis=1)
+    
+    # This is a weights column that is no longer used
+    session_df = session_df.drop('stop', axis=1, errors='ignore')
 
     # Rename
     trial_data = trial_data.rename(columns={'timestamp_trial_start': 'trial_start'})
@@ -777,8 +779,8 @@ def parse_hdf5_files(path_to_terminal_data, mouse_names,
         scored_by_n_trials.rename('n_trials'),
         ], axis=1, verify_integrity=True)
 
-    # Join on weight and date
-    perf_metrics = perf_metrics.join(session_df[['date', 'weight']])
+    # Join on weight and date (now date only)
+    perf_metrics = perf_metrics.join(session_df[['date']])
 
     # Index by date
     perf_metrics = perf_metrics.reset_index().set_index(
@@ -995,14 +997,17 @@ def load_data_from_all_mouse_hdf5(mouse_names, munged_sessions,
             session_df['date'] == bad_date].loc[bad_mouse].T
         print("remove one of these sessions:\n{}".format(bad_sessions))
 
+
+    ## These weights columns are no longer used
     # Nullify zero weights
-    session_df.loc[session_df['weight'] < 1, 'weight'] = np.nan
+    #~ session_df.loc[session_df['weight'] < 1, 'weight'] = np.nan
     
-    # Drop useless columns from session_df
-    session_df = session_df.drop(
-        ['weights_date_string', 'weights_dt_start'], axis=1)
+    #~ # Drop useless columns from session_df
+    #~ session_df = session_df.drop(
+        #~ ['weights_date_string', 'weights_dt_start'], axis=1)
     
-    # Drop columns from trial_data that are redundant with session_df
+    
+    ## Drop columns from trial_data that are redundant with session_df
     # (because this is how they were aligned)
     trial_data = trial_data.drop(
         ['orig_session_num', 'box', 'date'], axis=1)
@@ -1430,35 +1435,43 @@ def load_data_from_single_hdf5(mouse_name, h5_filename,
         row['first_trial'].strftime('%Y%m%d%H%M%S'), mouse_name, row['box']),
         axis=1)
     
+    
+    ## Something is messed up with the weights for Bluefish_027 on 6-29
+    ## Just don't do any of the weight stuff
+    if False:
+        ## Align session_df with mouse_weights
+        # The assumption here is that each is unique based on 
+        # ['date', 'orig_session_num']. Otherwise this won't work.
+        assert not session_df[['date', 'orig_session_num']].duplicated().any()
+        
+        # Check for duplicates in mouse_weights
+        dup_check = mouse_weights[['date', 'orig_session_num']].duplicated() 
+        if dup_check.any():
+            # Not sure why this is happening, must be some bug in the way it
+            # was stored
+            # Just drop the duplicates
+            print("warning: duplicate sessions in {} mouse_weights on {}".format(
+                mouse_name,
+                ", ".join(map(str, mouse_weights.loc[dup_check, 'date'].values))
+                ))
+            mouse_weights = mouse_weights[~dup_check].copy()
 
-    ## Align session_df with mouse_weights
-    # The assumption here is that each is unique based on 
-    # ['date', 'orig_session_num']. Otherwise this won't work.
-    assert not session_df[['date', 'orig_session_num']].duplicated().any()
-    
-    # Check for duplicates in mouse_weights
-    dup_check = mouse_weights[['date', 'orig_session_num']].duplicated() 
-    if dup_check.any():
-        raise ValueError("duplicate sessions in {} mouse_weights on {}".format(
-            mouse_name,
-            ", ".join(map(str, mouse_weights.loc[dup_check, 'date'].values))
-            ))
-
-    # Rename the weights columns to be more meaningful after merge
-    mouse_weights = mouse_weights.rename(columns={
-        'date_string': 'weights_date_string',
-        'dt_start': 'weights_dt_start',
-        })
-    
-    # Left merge, so we always have the same length as session_df
-    # This drops extra rows in `mouse_weights`, corresponding to sessions
-    # with no trials, typically after a munging event, which is fine
-    session_df = pandas.merge(
-        session_df, mouse_weights, how='left', 
-        on=['date', 'orig_session_num'])
-    
-    # Make sure there was an entry in weights for every session
-    assert not session_df.isnull().any().any()
+        # Rename the weights columns to be more meaningful after merge
+        mouse_weights = mouse_weights.rename(columns={
+            'date_string': 'weights_date_string',
+            'dt_start': 'weights_dt_start',
+            })
+        
+        # Left merge, so we always have the same length as session_df
+        # This drops extra rows in `mouse_weights`, corresponding to sessions
+        # with no trials, typically after a munging event, which is fine
+        session_df = pandas.merge(
+            session_df, mouse_weights, how='left', 
+            on=['date', 'orig_session_num'])
+        
+        # Make sure there was an entry in weights for every session
+        # This is no longer true because of the dup_check drop above
+        assert not session_df.isnull().any().any()
 
 
     ## Add the unique session_name to mouse_trial_data
