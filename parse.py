@@ -112,6 +112,7 @@ def parse_sandboxes(
     keys_l = []
     skipped_for_no_trials = []
     skipped_for_no_pokes = []
+    skipped_for_broken_hdf5 = []
     all_encountered_mouse_names = []
 
     # Iterate over sandboxes
@@ -160,21 +161,26 @@ def parse_sandboxes(
         
         
         ## Load data from hdf5 file
-        with tables.open_file(hdf5_filename) as fi:
-            # Load trial data 
-            trial_data = pandas.DataFrame.from_records(
-                fi.root['trial_data'].read())
-            
-            # Load poke data
-            poke_data = pandas.DataFrame.from_records(
-                fi.root['continuous_data']['ChunkData_Pokes'].read())
-            
-            # Load sound data, or None if doesn't exist (e.g, poketrain)
-            try:
-                sound_data = pandas.DataFrame.from_records(
-                    fi.root['continuous_data']['ChunkData_Sounds'].read())
-            except IndexError:
-                sound_data = None
+        try:
+            with tables.open_file(hdf5_filename) as fi:
+                # Load trial data 
+                trial_data = pandas.DataFrame.from_records(
+                    fi.root['trial_data'].read())
+                
+                # Load poke data
+                poke_data = pandas.DataFrame.from_records(
+                    fi.root['continuous_data']['ChunkData_Pokes'].read())
+                
+                # Load sound data, or None if doesn't exist (e.g, poketrain)
+                try:
+                    sound_data = pandas.DataFrame.from_records(
+                        fi.root['continuous_data']['ChunkData_Sounds'].read())
+                except IndexError:
+                    sound_data = None
+        except tables.exceptions.HDF5ExtError:
+            # This happens on some broken HDF5 files
+            skipped_for_broken_hdf5.append(sandbox_name)
+            continue            
 
 
         ## Sometimes trials have a blank timestamp_trial_start
@@ -304,6 +310,14 @@ def parse_sandboxes(
 
 
     ## Warn about skipped sessions
+    if len(skipped_for_broken_hdf5) > 0:
+        print(
+            "warning: skipped the following sessions with broken HDF5, "
+            "these should be added to 'munged_sessions:'")
+        for session_name in skipped_for_broken_hdf5:
+            print('"{}",'.format(session_name))
+        print()
+        
     if len(skipped_for_no_trials) > 0:
         print(
             "warning: skipped the following sessions with zero trials, "
