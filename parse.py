@@ -516,7 +516,7 @@ def parse_sandboxes(
     ## Score sessions by fraction correct
     scored_by_fraction_correct = big_trial_df.groupby(
         ['mouse', 'session_name'])[
-        'outcome'].value_counts().unstack('outcome')
+        'outcome'].value_counts().unstack('outcome').fillna(0)
     scored_by_fraction_correct['perf'] = (
         scored_by_fraction_correct['correct'].divide(
         scored_by_fraction_correct.sum(axis=1)))
@@ -757,7 +757,7 @@ def parse_hdf5_files(path_to_terminal_data, mouse_names,
     ## Score sessions by fraction correct
     scored_by_fraction_correct = trial_data.groupby(
         ['mouse', 'session_name'])[
-        'outcome'].value_counts().unstack('outcome')
+        'outcome'].value_counts().unstack('outcome').fillna(0)
     scored_by_fraction_correct['perf'] = (
         scored_by_fraction_correct['correct'].divide(
         scored_by_fraction_correct.sum(axis=1)))
