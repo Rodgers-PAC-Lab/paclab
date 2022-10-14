@@ -1509,8 +1509,9 @@ def load_data_from_single_hdf5(mouse_name, h5_filename,
             "warning: dropping " 
             "{} unaligned pokes on dates {} from mouse {}".format(
             len(pokes_to_drop),
-            mouse_name,
-            dates_with_unaligned_pokes))
+            dates_with_unaligned_pokes,
+            mouse_name,            
+            ))
         mouse_poke_data = mouse_poke_data.loc[~to_drop].copy()
     assert not mouse_poke_data['session_name'].isnull().any()
 
@@ -1541,8 +1542,9 @@ def load_data_from_single_hdf5(mouse_name, h5_filename,
             "warning: dropping " 
             "{} unaligned sounds on dates {} from mouse {}".format(
             len(sounds_to_drop),
+            dates_with_unaligned_sounds,
             mouse_name,
-            dates_with_unaligned_sounds))
+            ))
         mouse_sound_data = mouse_sound_data.loc[~to_drop].copy()
     assert not mouse_sound_data['session_name'].isnull().any()
     
