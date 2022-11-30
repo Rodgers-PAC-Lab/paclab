@@ -139,6 +139,9 @@ def parse_sandboxes(
         
         # Get HDF5 filename
         hdf5_filename_l = glob.glob(os.path.join(sandbox_dir, '*.hdf5'))
+        if len(hdf5_filename_l) != 1:
+            print("error: no hdf5 data files found in {}\nadd {} to munged_sessions".format(sandbox_dir, sandbox_name))
+            continue
         assert len(hdf5_filename_l) == 1
         hdf5_filename = hdf5_filename_l[0]
         
