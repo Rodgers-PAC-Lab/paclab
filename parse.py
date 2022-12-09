@@ -110,6 +110,7 @@ def parse_sandboxes(
     sandbox_params_l = []
     task_params_l = []
     keys_l = []
+    skipped_for_no_hdf5 = []
     skipped_for_no_trials = []
     skipped_for_no_pokes = []
     skipped_for_broken_hdf5 = []
@@ -139,9 +140,13 @@ def parse_sandboxes(
         
         # Get HDF5 filename
         hdf5_filename_l = glob.glob(os.path.join(sandbox_dir, '*.hdf5'))
+        
+        # Skip if no hdf5 files found (and later warn)
         if len(hdf5_filename_l) != 1:
-            print("error: no hdf5 data files found in {}\nadd {} to munged_sessions".format(sandbox_dir, sandbox_name))
+            skipped_for_no_hdf5.append(sandbox_name)
             continue
+        
+        # Extract unique hdf5 filename
         assert len(hdf5_filename_l) == 1
         hdf5_filename = hdf5_filename_l[0]
         
@@ -313,6 +318,14 @@ def parse_sandboxes(
 
 
     ## Warn about skipped sessions
+    if len(skipped_for_no_hdf5) > 0:
+        print(
+            "warning: skipped the following sessions with no HDF5 file, "
+            "these should be added to 'munged_sessions:'")
+        for session_name in skipped_for_no_hdf5:
+            print('"{}",'.format(session_name))
+        print()    
+    
     if len(skipped_for_broken_hdf5) > 0:
         print(
             "warning: skipped the following sessions with broken HDF5, "
