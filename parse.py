@@ -48,9 +48,15 @@ def parse_sandboxes(
         Otherwise, for each (key, value) pair, rename the mouse named
         "key" to "value".     
 
-    protocol_name : string
-        This is the protocol to load from the HDF5 file. 
+    protocol_name : string or None
+        Every session stores the name of the protocol (or task) in 
+        task_params.json keyed by task_type. If `protocol_name` is specified
+        here, then only sessions for which `task_params[task_type]` matches
+        `protocol_name` will be included. 
+        If `protocol_name` is None, all sessions are included.
     
+    # TODO: Figure out why some PokeTrain sessions have >100K pokes
+
     This function:
     * Loads data from sandboxes specified by mouse_names
     * Adds useful columns like t_wrt_start, rewarded_port, etc to pokes
@@ -162,9 +168,10 @@ def parse_sandboxes(
         task_params.pop('graduation')
         
         
-        ## Skip PokeTrain
-        # TODO: Figure out why some PokeTrain sessions have >100K pokes
-        if task_params['task_type'] != protocol_name:
+        ## Include only the specified task_type
+        if (
+                protocol_name is not None and 
+                task_params['task_type'] != protocol_name):
             continue
         
         
@@ -378,8 +385,15 @@ def parse_sandboxes(
         trial_data_l, keys=keys_l, names=['mouse', 'session_name', 'trial'])
     big_poke_df = pandas.concat(
         poke_data_l, keys=keys_l, names=['mouse', 'session_name', 'poke'])
-    big_sound_df = pandas.concat(
-        sound_data_l, keys=keys_l, names=['mouse', 'session_name', 'sound'])
+
+    # Set this to None if no sound data
+    if np.all([val is None for val in sound_data_l]):
+        big_sound_df = None
+    else:
+        big_sound_df = pandas.concat(
+            sound_data_l, keys=keys_l, 
+            names=['mouse', 'session_name', 'sound'])
+    
     big_task_params = pandas.DataFrame.from_records(task_params_l,
         index=pandas.MultiIndex.from_tuples(keys_l, names=['mouse', 'session_name']))
     big_sandbox_params = pandas.DataFrame.from_records(sandbox_params_l,
