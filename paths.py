@@ -44,7 +44,7 @@ def get_path_to_terminal_data():
             '/terminal/autopilot/data')            
     else:
         path_to_terminal_data = (
-            '/home/rowan/mnt/cuttlefish/from_clownfish/autopilot'
+            '/home/rowan/mnt/cuttlefish/behavior/from_clownfish/autopilot'
             '/terminal/autopilot/data')
     
     # Check that the path exists
