@@ -13,7 +13,9 @@ def parse_sandboxes(
     munged_sessions=None,
     rename_sessions_l=None,
     rename_mouse_d=None,
-    protocol_name='PAFT'):
+    protocol_name='PAFT',
+    quiet=False,
+    ):
     """Load the data from the specified mice, clean, and return.
     
     This is a replacement of parse_hdf_files now that data is stored
@@ -102,6 +104,10 @@ def parse_sandboxes(
             TODO:
                 add "trial" as a level on the index
     """
+    ## Store text output here for logging
+    txt_output = ''
+    
+    
     ## Get list of available sandboxes
     sandbox_root_dir = os.path.join(path_to_terminal_data, 'sandboxes')
     sandbox_dir_l = sorted(
@@ -231,27 +237,36 @@ def parse_sandboxes(
             trial_data['trial_in_session'].values, correct_range)
         
         if np.any(extraneous_trials_mask):
-            print('warning: {} has extraneous trials: {}'.format(
+            txt_to_print = ('warning: {} has extraneous trials: {}\n'.format(
                 sandbox_name,
                 trial_data['trial_in_session'].values[extraneous_trials_mask]))
+            if not quiet:
+                print(txt_to_print)
+            txt_output += txt_to_print
 
         # These are trials that were not found, but should have been
         trials_not_found_mask = ~np.isin(
             correct_range, trial_data['trial_in_session'].values)
         
         if np.any(trials_not_found_mask):
-            print('warning: {} has missing trials: {}'.format(
+            txt_to_print = ('warning: {} has missing trials: {}\n'.format(
                 sandbox_name,
                 correct_range[trials_not_found_mask]))            
+            if not quiet:
+                print(txt_to_print)
+            txt_output += txt_to_print            
 
         # These are trial numbers that occurred more than once
         duplicate_trials_mask = trial_data['trial_in_session'].duplicated()
         
         if np.any(duplicate_trials_mask):
-            print('warning: {} has duplicate trials: {}'.format(
+            txt_to_print = ('warning: {} has duplicate trials: {}\n'.format(
                 sandbox_name,
                 trial_data['trial_in_session'].values[duplicate_trials_mask],
                 ))
+            if not quiet:
+                print(txt_to_print)
+            txt_output += txt_to_print            
         
         
         ## Coerce dtypes for trial_data
@@ -326,36 +341,61 @@ def parse_sandboxes(
 
     ## Warn about skipped sessions
     if len(skipped_for_no_hdf5) > 0:
-        print(
+        txt_to_print = (
             "warning: skipped the following sessions with no HDF5 file, "
-            "these should be added to 'munged_sessions:'")
+            "these should be added to 'munged_sessions:'\n")
+
         for session_name in skipped_for_no_hdf5:
-            print('"{}",'.format(session_name))
-        print()    
+            txt_to_print += ('"{}",'.format(session_name)) + '\n'
+
+        txt_to_print += '\n'
+        
+        if not quiet:
+            print(txt_to_print)
+        txt_output += txt_to_print            
+
     
     if len(skipped_for_broken_hdf5) > 0:
-        print(
+        txt_to_print = (
             "warning: skipped the following sessions with broken HDF5, "
-            "these should be added to 'munged_sessions:'")
+            "these should be added to 'munged_sessions:'\n")
+            
         for session_name in skipped_for_broken_hdf5:
-            print('"{}",'.format(session_name))
-        print()
+            txt_to_print += ('"{}",'.format(session_name)) + '\n'
+            
+        txt_to_print += '\n'
+        
+        if not quiet:
+            print(txt_to_print)
+        txt_output += txt_to_print            
         
     if len(skipped_for_no_trials) > 0:
-        print(
+        txt_to_print = (
             "warning: skipped the following sessions with zero trials, "
-            "these should be added to 'munged_sessions:'")
+            "these should be added to 'munged_sessions:'\n")
+            
         for session_name in skipped_for_no_trials:
-            print('"{}",'.format(session_name))
-        print()
+            txt_to_print += ('"{}",'.format(session_name)) + '\n'
+
+        txt_to_print += '\n'
+        
+        if not quiet:
+            print(txt_to_print)
+        txt_output += txt_to_print            
     
     if len(skipped_for_no_pokes) > 0:
-        print(
+        txt_to_print = (
             "warning: skipped the following sessions with zero pokes, "
-            "these should be added to 'munged_sessions:'")
+            "these should be added to 'munged_sessions:'\n")
+            
         for session_name in skipped_for_no_pokes:
-            print('"{}",'.format(session_name))
-        print()
+            txt_to_print += ('"{}",'.format(session_name)) + '\n'
+
+        txt_to_print += '\n'
+        
+        if not quiet:
+            print(txt_to_print)
+        txt_output += txt_to_print            
 
 
     ## Warn if no mice found
@@ -365,12 +405,16 @@ def parse_sandboxes(
             if mouse not in all_encountered_mouse_names:
                 missing_mice.append(mouse)
         if len(missing_mice) > 0:
-            print("warning: the following mice were not found:")
-            print("\n".join(missing_mice))
-            print()
-            print("did you mean one of the following?")
-            print(", ".join(sorted(all_encountered_mouse_names)))
-            print()
+            txt_to_print = "warning: the following mice were not found:\n"
+            txt_to_print += "\n".join(missing_mice)
+            txt_to_print += '\n'
+            txt_to_print += "did you mean one of the following?\n"
+            txt_to_print += ", ".join(sorted(all_encountered_mouse_names)) + '\n'
+            txt_to_print += '\n'
+
+            if not quiet:
+                print(txt_to_print)
+            txt_output += txt_to_print                  
     
 
     ## Error if no sessions found
@@ -505,6 +549,42 @@ def parse_sandboxes(
     #assert (n_poke_types_by_trial['correct'] > 0).all()
 
 
+    ## Check whether first_poke was correctly identified
+    n_first_pokes_per_trial = big_poke_df.groupby(
+        ['session_name', 'trial'])['first_poke'].sum()
+    n_first_pokes_per_trial = n_first_pokes_per_trial[
+        n_first_pokes_per_trial != 1]
+    if len(n_first_pokes_per_trial) > 0:
+        txt_to_print = (
+            'warning: non-unique first poke in the following trials:\n' + 
+            str(n_first_pokes_per_trial) + '\n')
+        if not quiet:
+            print(txt_to_print)
+        txt_output += txt_to_print            
+    
+    # Fix this
+    # I think there are at least 3 ways that first_poke can be wrong
+    # First it sometimes is not set for any poke (rarely)
+    # Second it sometimes is set for multiple pokes (rarely)
+    # Third it might be set for the previously rewarded port 
+    first_poke_idx = big_poke_df[big_poke_df['poke_type'] != 'prev'].groupby(
+        ['session_name', 'trial'])['timestamp'].idxmin().values
+    first_poke_midx = pandas.MultiIndex.from_tuples(
+        first_poke_idx, names=big_poke_df.index.names)
+    big_poke_df['first_poke2'] = big_poke_df['first_poke'].copy()
+    big_poke_df['first_poke2'] = False
+    big_poke_df.loc[first_poke_midx, 'first_poke2'] = True
+    
+    # Replace first_poke with first_poke2
+    # In at least one case, this creates a trial that previously had a 
+    # first_poke but now no longer does, because it consists entirely of
+    # pokes on the previously_rewarded_port, one of which was erroneously
+    # labeled first poke initially
+    # 2023-02-16-14-52-42-349196_Moon_2 trial 54
+    big_poke_df['first_poke'] = big_poke_df['first_poke2']
+    big_poke_df = big_poke_df.drop('first_poke2', axis=1)
+
+
     ## Label the outcome of each trial, based on the type of the first poke
     # time of first poke of each type
     first_poke = big_poke_df.reset_index().groupby(
@@ -597,6 +677,7 @@ def parse_sandboxes(
         'trial_data': big_trial_df,
         'poke_data': big_poke_df,
         'sound_data': big_sound_df,
+        'txt_output': txt_output,
         }
 
 def parse_hdf5_files(path_to_terminal_data, mouse_names, 
