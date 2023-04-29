@@ -716,6 +716,46 @@ def parse_sandboxes(
         'txt_output': txt_output,
         }
 
+def identify_duplicated_sessions(session_df, quiet=False):
+    # Store output here
+    txt_output = ''
+    
+    # Identify duplicated sessions
+    n_sessions_by_date = session_df.groupby(['mouse', 'date']).size()
+    days_with_multiple_sessions = n_sessions_by_date[n_sessions_by_date > 1]
+
+    # Display info about problem dates
+    if len(days_with_multiple_sessions) > 0:
+        txt_to_print = (
+            "warning: some days have multiple sessions from the same mouse!\n"
+            "for each case below, add all but 1 session to 'munged_sessions'\n"
+            )
+        if not quiet:
+            print(txt_to_print)
+        txt_output += txt_to_print
+        
+        # Iterate through each problem case
+        for (mouse, date) in days_with_multiple_sessions.index:
+            mouse_session_df = session_df.loc[mouse]
+            mouse_date_session_df = mouse_session_df.loc[
+                mouse_session_df['date'] == date]
+            
+            txt_to_print = "{} sessions from {} on {}".format(
+                len(mouse_date_session_df),
+                mouse, date)
+            
+            txt_to_print += str(
+                mouse_date_session_df[
+                ['approx_duration', 'n_trials', 'date', 'first_trial']])
+            
+            txt_to_print += '\n'
+            
+            if not quiet:
+                print(txt_to_print)
+            txt_output += txt_to_print
+    
+    return txt_output
+
 def parse_hdf5_files(path_to_terminal_data, mouse_names, 
     munged_sessions=None,
     rename_sessions_l=None,
