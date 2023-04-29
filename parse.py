@@ -669,7 +669,43 @@ def parse_sandboxes(
     #~ perf_metrics = perf_metrics.groupby(['mouse', 'date']).apply(
         #~ lambda df: df.sort_values('n_trials').iloc[-1])
     
+
+    ## Calculate first port poked
+    # TODO: Why is this null in rare cases?
+    # TODO: move this function to paclab repository
+    big_trial_df['first_port_poked'] = big_poke_df[big_poke_df['first_poke']][
+        'poked_port'].droplevel('poke')
+
     
+    ## Convert port names to port dir
+    big_trial_df = convert_port_name_to_port_dir(big_trial_df)
+    big_poke_df = convert_port_name_to_port_dir(big_poke_df)
+
+
+    ## Calculate errdist
+    # Define fixing function
+    def fix(arr):
+        """Fix angular variable to [-180, 180)"""
+        return np.mod(arr + 180, 360) - 180
+    
+    # Apply fix to each
+    big_trial_df['fpp_wrt_rp'] = fix(
+        big_trial_df['first_port_poked_dir'] - 
+        big_trial_df['rewarded_port_dir'])
+    big_trial_df['fpp_wrt_prp'] = fix(
+        big_trial_df['first_port_poked_dir'] - 
+        big_trial_df['previously_rewarded_port_dir'])
+    big_trial_df['rp_wrt_prp'] = fix(
+        big_trial_df['rewarded_port_dir'] - 
+        big_trial_df['previously_rewarded_port_dir'])
+    big_poke_df['pp_wrt_rp'] = fix(
+        big_poke_df['poked_port_dir'] - 
+        big_poke_df['rewarded_port_dir'])
+    big_poke_df['pp_wrt_prp'] = fix(
+        big_poke_df['poked_port_dir'] - 
+        big_poke_df['previously_rewarded_port_dir'])
+
+
     ## Return
     return {
         'session_df': big_session_params,
@@ -1716,3 +1752,118 @@ def load_data_from_single_hdf5(mouse_name, h5_filename,
     
     ## Return
     return session_df, mouse_trial_data, mouse_poke_data, mouse_sound_data
+
+def generate_box_port_dir_df():
+    """Returns the direction of each port.
+    
+    This is copied from autopilot/gui/plots/plot.py, and needs to be
+    in sync with that. 
+    
+    Returns: DataFrame
+        index: integers
+        columns: box, port, dir
+            box: name of parent pi
+            port: name of port
+            dir: direction of port, with 0 indicating north and 90 east
+    """
+    box2port_name2port_dir = {
+        'rpi_parent01': {
+            'rpi09_L': 315,
+            'rpi09_R': 0,
+            'rpi10_L': 45,
+            'rpi10_R': 90,
+            'rpi11_L': 135,
+            'rpi11_R': 180,
+            'rpi12_L': 225,
+            'rpi12_R': 270,
+        },
+        'rpi_parent02': {
+            'rpi07_L': 315,
+            'rpi07_R': 0,
+            'rpi08_L': 45,
+            'rpi08_R': 90,
+            'rpi05_L': 135,
+            'rpi05_R': 180,
+            'rpi06_L': 225,
+            'rpi06_R': 270,
+        },    
+        'rpiparent03': {
+            'rpi01_L': 225,
+            'rpi01_R': 270,
+            'rpi02_L': 315,
+            'rpi02_R': 0,
+            'rpi03_L': 45,
+            'rpi03_R': 90,
+            'rpi04_L': 135,
+            'rpi04_R': 180,
+        }, 
+        'rpiparent04': {
+            'rpi18_L': 90,
+            'rpi18_R': 135,
+            'rpi19_L': 180,
+            'rpi19_R': 225,
+            'rpi20_L': 270,
+            'rpi20_R': 315,
+            'rpi21_L': 0,
+            'rpi21_R': 45,
+        },
+    }    
+
+    # Parse
+    ser_d = {}
+    for box_name, port_name2port_dir in box2port_name2port_dir.items():
+        ser = pandas.Series(port_name2port_dir, name='dir')
+        ser.index.name = 'port'
+        ser_d[box_name] = ser
+
+    # Concat
+    box_port_dir_df = pandas.concat(ser_d, names=['box']).reset_index()
+    
+    return box_port_dir_df
+
+def convert_port_name_to_port_dir(df):
+    """Add columns with port dir based on columns of port names
+    
+    First uses generate_box_port_dir_df to get the conversion.
+    
+    Checks for the following column names:
+        previously_rewarded_port
+        rewarded_port
+        first_port_poked
+        poked_port
+    
+    For each of the above, replaces port names with port directions (with
+    0 meaning north and 90 east), and stores as a new column of the same name
+    with "_dir" appended.
+    
+    Wherever the conversion fails, np.nan will be used.
+
+    TODO: move this function to paclab repository
+    
+    Returns: a copy of `df`, with new columns added
+    """
+    # Get conversion df
+    box_port_dir_df = generate_box_port_dir_df()
+    
+    # Turn this into a replacing dict
+    replacing_d = box_port_dir_df.set_index('port')['dir'].to_dict()
+    replacing_d[''] = np.nan # use nan for blanks    
+
+    # Copy
+    res = df.copy()
+
+    # Columns to check for
+    replace_cols = [
+        'previously_rewarded_port', 
+        'rewarded_port', 
+        'first_port_poked',
+        'poked_port',
+        ]
+
+    # Do each column
+    for replace_col in replace_cols:
+        if replace_col in res.columns:
+            # Replace
+            res[replace_col + '_dir'] = res[replace_col].replace(replacing_d)
+
+    return res
