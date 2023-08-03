@@ -6,6 +6,7 @@ import tables
 import pandas
 import glob
 import json
+import my
 
 def parse_sandboxes(
     path_to_terminal_data, 
@@ -172,6 +173,14 @@ def parse_sandboxes(
         
         # Pop this one which is always an empty dict
         task_params.pop('graduation')
+        
+        
+        ## Add the HDF5 filename mod time to sandbox_params
+        # Mod time
+        # This is approximately the end time
+        mod_ts = my.misc.get_file_time(hdf5_filename, human=False)
+        mod_time = datetime.datetime.fromtimestamp(mod_ts)        
+        sandbox_params['hdf5_modification_time'] = mod_time
         
         
         ## Include only the specified task_type
@@ -462,11 +471,18 @@ def parse_sandboxes(
         'timestamp_trial_start'].max()
     big_session_params['approx_duration'] = (
         big_session_params['last_trial'] - big_session_params['first_trial'])
-
+    
+    # Alternate estimate of session duration
+    big_session_params['approx_duration_hdf5'] = (
+        big_session_params['hdf5_modification_time'] - 
+        big_session_params['first_trial'])
+    
+    
 
     ## Parse trial data further
     # Rename
-    big_trial_df = big_trial_df.rename(columns={'timestamp_trial_start': 'trial_start'})
+    big_trial_df = big_trial_df.rename(
+        columns={'timestamp_trial_start': 'trial_start'})
 
     # Drop, not sure what this is supposed to be
     big_trial_df = big_trial_df.drop('group', axis=1)
@@ -475,14 +491,22 @@ def parse_sandboxes(
     big_trial_df = big_trial_df.drop(['session', 'session_uuid'], axis=1)
 
     # Add duration
+    # This shift avoids shifting in data from another session
+    # It relies on the index being ['mouse', 'session_name', 'trial'] here
+    next_trial_start = big_trial_df.groupby(
+        ['mouse', 'session_name'])['trial_start'].shift(-1)
+    
+    # Duration will be null on the last trial of a session, because there is
+    # no next_trial_start
     big_trial_df['duration'] = (
-        big_trial_df['trial_start'].shift(-1) - big_trial_df['trial_start']).apply(
+        next_trial_start - big_trial_df['trial_start']).apply(
         lambda ts: ts.total_seconds())
 
 
     ## Add columns to big_trial_df, and calculate t_wrt_start for pokes
     # Join 'trial_start' onto big_poke_df
-    big_poke_df = big_poke_df.join(big_trial_df['trial_start'], on=['mouse', 'session_name', 'trial'])
+    big_poke_df = big_poke_df.join(
+        big_trial_df['trial_start'], on=['mouse', 'session_name', 'trial'])
 
     # Drop pokes without a matching trial start
     # TODO: Look into why this is happening -- is it only before first trial 
@@ -490,7 +514,8 @@ def parse_sandboxes(
     big_poke_df = big_poke_df[~big_poke_df['trial_start'].isnull()].copy()
 
     # Normalize poke time to trial start time
-    big_poke_df['t_wrt_start'] = big_poke_df['timestamp'] - big_poke_df['trial_start']
+    big_poke_df['t_wrt_start'] = (
+        big_poke_df['timestamp'] - big_poke_df['trial_start'])
     big_poke_df['t_wrt_start'] = big_poke_df['t_wrt_start'].apply(
         lambda ts: ts.total_seconds())
 
@@ -647,11 +672,13 @@ def parse_sandboxes(
 
 
     ## Score sessions by n_trials
-    scored_by_n_trials = big_trial_df.groupby(['mouse', 'session_name']).size()
+    scored_by_n_trials = big_trial_df.groupby(
+        ['mouse', 'session_name']).size()
 
 
     ## Score by n_ports
-    scored_by_n_ports = big_trial_df.groupby(['mouse', 'session_name'])['rcp'].mean()
+    scored_by_n_ports = big_trial_df.groupby(
+        ['mouse', 'session_name'])['rcp'].mean()
 
 
     ## Extract key performance metrics
@@ -663,7 +690,8 @@ def parse_sandboxes(
         ], axis=1, verify_integrity=True)
 
     # Join date
-    perf_metrics = perf_metrics.join(big_session_params['date'], on=['mouse', 'session_name'])
+    perf_metrics = perf_metrics.join(
+        big_session_params['date'], on=['mouse', 'session_name'])
 
     #~ # Keep the session with the most trials by date
     #~ perf_metrics = perf_metrics.groupby(['mouse', 'date']).apply(
