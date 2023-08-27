@@ -7,6 +7,97 @@ import pandas
 import glob
 import json
 import my
+import paclab
+
+def load_data(mouse_names, protocol_name='PAFT'):
+    """Simple loading function
+    
+    This is intended to replace boilerplate code in loading behavior data.
+    
+    Steps:
+        Gets path to data
+        Loads munged sessions
+        Calls paclab.parse.parse_sandboxes
+        Checks for duplicate sessions and prints warning
+        Adds an "n_session" column for each session
+        Returns the data unpacked from paclab.parse.parse_sandboxes
+    
+    Arguments (see paclab.parse.parse_sandboxes for details)
+        mouse_names : list-like
+            A list of mouse names to load
+        
+        protocol_name : string
+            Which protocols to load
+    
+    Example call:
+        perf_metrics, session_df, trial_data, poke_data = load_data(
+            mouse_names=mouse_names, protocol_name='PAFT')
+    
+    Returns:
+        perf_metrics, session_df, trial_data, poke_data
+    """
+    ## Get data for parse
+    # Get path to terminal data
+    path_to_terminal_data = paclab.paths.get_path_to_terminal_data()
+
+    # Munged sessions
+    munged_sessions_df = pandas.read_excel(os.path.expanduser(
+        '~/mnt/cuttlefish/shared/munged_sessions.xlsx'))
+    munged_sessions = munged_sessions_df['Session Name'].values
+    rename_sessions_l = [
+        ]
+
+    # Get parsed_results
+    parsed_results = paclab.parse.parse_sandboxes(
+        path_to_terminal_data, 
+        mouse_names=mouse_names,
+        rename_sessions_l=rename_sessions_l,
+        munged_sessions=munged_sessions,
+        protocol_name=protocol_name,
+        )
+
+    # Extract the parsed_results into their own variables
+    perf_metrics = parsed_results['perf_metrics'].copy()
+    session_df = parsed_results['session_df'].copy()
+    trial_data = parsed_results['trial_data'].copy()
+    poke_data = parsed_results['poke_data'].copy()
+
+    # Identify duplicated sessions
+    n_sessions_by_date = session_df.groupby(['mouse', 'date']).size()
+    days_with_multiple_sessions = n_sessions_by_date[n_sessions_by_date > 1]
+
+    # Display info about problem dates
+    if len(days_with_multiple_sessions) > 0:
+        print(
+            "warning: some days have multiple sessions from the same mouse!")
+        print(
+            "for each case below, add all but one session to 'munged_sessions'")
+        print()
+        
+        # Iterate through each problem case
+        for (mouse, date) in days_with_multiple_sessions.index:
+            mouse_session_df = session_df.loc[mouse]
+            mouse_date_session_df = mouse_session_df.loc[
+                mouse_session_df['date'] == date]
+            print("{} sessions from {} on {}".format(
+                len(mouse_date_session_df),
+                mouse, date))
+            print(mouse_date_session_df[
+                ['approx_duration', 'n_trials', 'date', 'first_trial']])
+            print()
+
+    # Add n_session for each mouse
+    session_df['n_session'] = -1
+    for mouse, subdf in session_df.groupby('mouse'):
+        ranked = subdf['first_trial'].rank(method='first').astype(int) - 1
+        session_df.loc[ranked.index, 'n_session'] = ranked.values
+    assert not (session_df['n_session'] == -1).any()
+
+    # Join n_session on perf_metrics
+    perf_metrics = perf_metrics.join(session_df['n_session'])
+
+    # Return data
+    return perf_metrics, session_df, trial_data, poke_data
 
 def parse_sandboxes(
     path_to_terminal_data, 
