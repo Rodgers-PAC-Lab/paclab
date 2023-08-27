@@ -595,7 +595,19 @@ def parse_sandboxes(
         big_session_params['hdf5_modification_time'] - 
         big_session_params['first_trial'])
     
-    
+    # Set protocol_name from protocol_filename where needed
+    # Before 2022-10-07, we only stored protocol_name, and aftewards
+    # we only stored protocol_filename
+    assert ((
+        big_session_params['protocol_filename'].isnull().astype(int) + 
+        big_session_params['protocol_name'].isnull().astype(int)
+        ) == 1).all()
+    short_protocol_name = big_session_params['protocol_filename'].dropna().apply(
+        lambda s: os.path.split(s)[1].replace('.json', ''))
+    big_session_params.loc[
+        short_protocol_name.index, 'protocol_name'] = short_protocol_name.values
+    assert not big_session_params['protocol_name'].isnull().any()
+
 
     ## Parse trial data further
     # Rename
