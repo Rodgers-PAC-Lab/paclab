@@ -8,6 +8,7 @@ import glob
 import json
 import my
 import paclab
+import pytz
 
 def load_data(mouse_names, protocol_name='PAFT'):
     """Simple loading function
@@ -196,6 +197,10 @@ def parse_sandboxes(
             TODO:
                 add "trial" as a level on the index
     """
+    ## This is used for all timestamps
+    tz = pytz.timezone('America/New_York')
+    
+    
     ## Store text output here for logging
     txt_output = ''
     
@@ -379,9 +384,14 @@ def parse_sandboxes(
 
         # Coerce timestamp to datetime
         for timestamp_column in ['timestamp_reward', 'timestamp_trial_start']:
+            # Coerce
             trial_data[timestamp_column] = (
                 trial_data[timestamp_column].apply(
                 lambda s: datetime.datetime.fromisoformat(s)))
+            
+            # Add timezone
+            trial_data[timestamp_column] = (
+                trial_data[timestamp_column].dt.tz_localize(tz))
 
         # Coerce the columns that are boolean
         bool_cols = []
@@ -398,10 +408,15 @@ def parse_sandboxes(
 
         # Coerce timestamp to datetime
         for timestamp_column in ['timestamp']:
+            # Coerce
             poke_data[timestamp_column] = (
                 poke_data[timestamp_column].apply(
                 lambda s: datetime.datetime.fromisoformat(s)))
 
+            # Add timezone
+            poke_data[timestamp_column] = (
+                poke_data[timestamp_column].dt.tz_localize(tz))
+        
         # Coerce the columns that are boolean
         bool_cols = ['first_poke', 'reward_delivered']
         for bool_col in bool_cols:
@@ -425,9 +440,14 @@ def parse_sandboxes(
 
             # Coerce timestamp to datetime
             for timestamp_column in ['locking_timestamp']:
+                # Coerce
                 sound_data[timestamp_column] = (
                     sound_data[timestamp_column].apply(
                     lambda s: datetime.datetime.fromisoformat(s)))
+                
+                # Add timezone
+                sound_data[timestamp_column] = (
+                    sound_data[timestamp_column].dt.tz_localize(tz))
 
 
         ## Append
@@ -538,10 +558,17 @@ def parse_sandboxes(
             sound_data_l, keys=keys_l, 
             names=['mouse', 'session_name', 'sound'])
     
+    # Make DataFrame from task_params and sandbox_params
     big_task_params = pandas.DataFrame.from_records(task_params_l,
         index=pandas.MultiIndex.from_tuples(keys_l, names=['mouse', 'session_name']))
     big_sandbox_params = pandas.DataFrame.from_records(sandbox_params_l,
         index=pandas.MultiIndex.from_tuples(keys_l, names=['mouse', 'session_name']))
+
+    # Set timezone
+    big_sandbox_params['hdf5_modification_time'] = (
+        big_sandbox_params['hdf5_modification_time'].dt.tz_localize(tz))
+
+    # Combine big_task_params and big_sandbox_params
     big_session_params = pandas.concat(
         [big_task_params, big_sandbox_params], axis=1, verify_integrity=True)
 
