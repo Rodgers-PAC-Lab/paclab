@@ -595,17 +595,35 @@ def parse_sandboxes(
         big_session_params['hdf5_modification_time'] - 
         big_session_params['first_trial'])
     
-    # Set protocol_name from protocol_filename where needed
+    
+    ## Set protocol_name from protocol_filename where needed
     # Before 2022-10-07, we only stored protocol_name, and aftewards
     # we only stored protocol_filename
-    assert ((
-        big_session_params['protocol_filename'].isnull().astype(int) + 
-        big_session_params['protocol_name'].isnull().astype(int)
-        ) == 1).all()
-    short_protocol_name = big_session_params['protocol_filename'].dropna().apply(
-        lambda s: os.path.split(s)[1].replace('.json', ''))
-    big_session_params.loc[
-        short_protocol_name.index, 'protocol_name'] = short_protocol_name.values
+    if 'protocol_filename' in big_session_params.columns:
+        # This means we are analyzing at least one session after 2022-10-07
+        if 'protocol_name' in big_session_params.columns:
+            # This means we are analyzing a mix of data before and after 10-07
+            assert ((
+                big_session_params['protocol_filename'].isnull().astype(int) + 
+                big_session_params['protocol_name'].isnull().astype(int)
+                ) == 1).all()
+        else:
+            # This means we are only analyzing data after 2022-10-07
+            # Create this column so we can assign to it below
+            big_session_params['protocol_name'] = ''
+
+        # Generate a short protocol name, which is the filename without the
+        # full path and without the extension
+        short_protocol_name = big_session_params['protocol_filename'].dropna().apply(
+            lambda s: os.path.split(s)[1].replace('.json', ''))
+        
+        # Assign this into protocol_name, which we verified above was either
+        # null for the relevant rows, or we just created the column
+        big_session_params.loc[
+            short_protocol_name.index, 'protocol_name'] = short_protocol_name.values
+    
+    # Regardless of the above, this should not be null now, unless we are
+    # analyzing REALLY old data (?)
     assert not big_session_params['protocol_name'].isnull().any()
 
 
