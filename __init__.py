@@ -4,3 +4,4 @@
 
 from . import paths
 from . import parse
+from . import sleap
