@@ -1292,8 +1292,7 @@ def load_data_from_all_mouse_hdf5(mouse_names, munged_sessions,
         for munged_session in munged_sessions:
             if munged_session in session_df.index.levels[1]:
                 droppable_sessions.append(munged_session)
-            else:
-                print("warning: cannot find {} to drop it".format(munged_session))
+
     if len(droppable_sessions) > 0:
         session_df = session_df.drop(droppable_sessions, level='session_name')
         trial_data = trial_data.drop(droppable_sessions, level='session_name')
