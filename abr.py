@@ -8,9 +8,25 @@ import pandas
 import socket
 
 
-def get_metadata(notes_directory,data_directory,datestring):
-    ## Get the metadata from a day of recordings
-    csv_filename = os.path.join(notes_directory,'20'+datestring+'_ABR', datestring + '_notes.csv')
+def get_metadata(notes_directory, data_directory, datestring):
+    """Get the metadata from a day of recordings
+    
+    Looks for a file called notes_directory/20{}_ABR/{}_notes.csv
+    where {} is the datestring.
+    Reads this csv file
+    Includes only the rows where include is true
+    Forms a session_name column
+    Forms a datafile column
+    
+    Returns: DataFrame
+    """
+    # Form the filename to the csv file
+    csv_filename = os.path.join(
+        notes_directory,
+        '20' + datestring + '_ABR', 
+        datestring + '_notes.csv')
+    
+    # Read the CSV file
     metadata = pandas.read_csv(csv_filename)
 
     # Drop the ones that we don't want to include
@@ -25,6 +41,7 @@ def get_metadata(notes_directory,data_directory,datestring):
     metadata['datafile'] = [
         os.path.join(data_directory, session_name + '.bin')
         for session_name in metadata['session_name']]
+    
     return metadata
 
 def parse_header(header):
@@ -286,47 +303,54 @@ def extract_duration_of_onsets2(onsets, offsets):
 
     return np.asarray(onsets3), np.asarray(durations)
 
-def parse_by_date(notes_directory, data_directory, datestring, header_size,
-    channels, audio_threshold, abr_params):
+def parse_by_date(notes_directory, data_directory, datestring,
+    header_size, neural_channel, speaker_channel, audio_threshold, 
+    audio_drop_threshold, neural_drop_threshold, 
+    abr_start_sample, abr_stop_sample,
+    ):
     """Parses all of the LV binaries from a certain date
-    
-    Arguments
-        audio_threshold : numeric
-            stimulus onsets are detected when audio data exceeds this threshold
-        
-        abr_params : dict, with the following items:
-            
-            audio_drop_threshold : numeric
-                Drop any trials where abs(audio data) exceeds this threshold
-            
-            neural_drop_threshold : numeric
-                Drop any trials where abs(neural data) exceeds this threshold
-    """
 
-    #Unpack dicts
-    audio_drop_threshold = abr_params["audio_drop_threshold"]
-    neural_drop_threshold = abr_params["neural_drop_threshold"]
-    abr_start_sample = abr_params["abr_start_sample"]
-    abr_stop_sample = abr_params["abr_stop_sample"]
-    abr_fig_ymin_uV = abr_params["abr_fig_ymin_uV"]
-    abr_fig_ymax_uV = abr_params["abr_fig_ymax_uV"]
-    highpass_freq = abr_params["highpass_freq"]
-    lowpass_freq = abr_params["lowpass_freq"]
-    filter_type = abr_params["filter_type"]
-    abr_n_recent_trials = abr_params["abr_n_recent_trials"]
-    neural_channel = channels["neural_channel"]
-    speaker_channel = channels["speaker_channel"]
-    #Get the metadata
-    metadata = get_metadata(notes_directory,data_directory,datestring)
+    Arguments
+        notes_directory: path to where notes are
+        data_directory: path to where data is
+        datestring: 6 character string for experiment date
+        header_size: size of header
+        neural_channel: channel of neural data in the binary file
+        speaker_channel: channel of audio data in the binary file
+        audio_threshold: numeric
+            stimulus onsets are detected when audio data exceeds this threshold
+        audio_drop_threshold: numeric
+            Drop any trials where abs(audio data) exceeds this threshold
+        neural_drop_threshold: numeric
+            Drop any trials where abs(neural data) exceeds this threshold
+        abr_start_sample, abr_stop_sample: int
+            How much data to take around each onset
+    
+    Returns: big_ad, big_neural, metadata
+        big_ad: DataFrame
+            index: MultiIndex, session * trial
+            columns: timepoint, in ms
+            values: voltage at that time
+        big_neural: DataFrame
+            Matches shape of big_ad, but for neural data
+        metadata: DataFrame
+            Data load from the notes
+            Columns: session, mouse, pre_vs_post, positive_electrode,
+                speaker_side, amplitude, include, notes, session_name, datafile
+    """
+    ## Load the metadata from that date
+    metadata = get_metadata(notes_directory, data_directory, datestring)
+    
+    
     ## Load data from all files
     # Store results here
     triggered_ad_l = []
-    triggered_ad_hp_l = []
     triggered_neural_l = []
     keys_l = []
 
     # Iterate over rows in metadata
     for metadata_idx in metadata.index:
+        
         ## Get the name of the data file
         datafile = metadata.loc[metadata_idx, 'datafile']
         session_name = metadata.loc[metadata_idx, 'session_name']
@@ -337,7 +361,8 @@ def parse_by_date(notes_directory, data_directory, datestring, header_size,
             print("warning: {} does not exist".format(datafile))
             continue
 
-            ## Open the file and read the header
+
+        ## Open the file and read the header
         # Read the data
         with open(datafile, "rb") as fi:
             data_bytes = fi.read()
@@ -355,12 +380,15 @@ def parse_by_date(notes_directory, data_directory, datestring, header_size,
         # We use this a lot so extract from the dict
         sampling_rate = first_header_info['sampling_sps']
 
+
         ## Parse the entire file
         data = parse_data(
             data_bytes,
             first_header_info['number_channels'],
             first_header_info['number_samples'],
         )
+        
+        
         ## Extract the audio onsets
         # Extract audio data
         audio_data = data[:, speaker_channel]
@@ -390,44 +418,27 @@ def parse_by_date(notes_directory, data_directory, datestring, header_size,
         # Extract data
         neural_data = data[:, neural_channel] * 1e6
 
-        # Highpass or bandpass filter
-        nyquist_freq = sampling_rate / 2.
-        if filter_type == "highpass":
-            ahi, bhi = scipy.signal.butter(2, highpass_freq / nyquist_freq,
-                                       btype='high')
-        else:
-            ahi, bhi = scipy.signal.butter(2, [highpass_freq / nyquist_freq,
-                lowpass_freq / nyquist_freq], btype='band')
-        neural_data_hp = scipy.signal.filtfilt(ahi, bhi, neural_data)
-
-        # Filter the audio data in the same way I GUESS?????
-        audio_data_hp = scipy.signal.filtfilt(ahi, bhi, audio_data)
-        triggered_ad_hp = np.array([
-            audio_data_hp[trigger + abr_start_sample:trigger + abr_stop_sample]
-            for trigger in onsets])
-        # Extract highpassed neural data around triggers
+        # Extract neural data around triggers
         triggered_neural = np.array([
-            neural_data_hp[trigger + abr_start_sample:trigger + abr_stop_sample]
+            neural_data[trigger + abr_start_sample:trigger + abr_stop_sample]
             for trigger in onsets])
 
+        
         ## Define time course in ms
         t_plot = np.arange(
             abr_start_sample, abr_stop_sample) / sampling_rate * 1000
 
+        
         ## Dataframe the results
         triggered_ad_df = pandas.DataFrame(triggered_ad, columns=t_plot)
         triggered_ad_df.index.name = 'trial'
         triggered_ad_df.columns.name = 'timepoint'
 
-        triggered_ad_hp_df = pandas.DataFrame(triggered_ad_hp, columns=t_plot)
-        triggered_ad_hp_df.index.name = 'trial'
-        triggered_ad_hp_df.columns.name = 'timepoint'
-
         triggered_neural_df = pandas.DataFrame(triggered_neural, columns=t_plot)
         triggered_neural_df.index.name = 'trial'
         triggered_neural_df.columns.name = 'timepoint'
 
-        
+
         ## Remove rows with missing packets
         # Identify rows with missing packets
         # This is any row where the audio data exceeds audio_drop_threshold
@@ -436,258 +447,31 @@ def parse_by_date(notes_directory, data_directory, datestring, header_size,
             triggered_ad_df.abs() > audio_drop_threshold).any(axis=1)
         bad_neural_mask = (
             triggered_neural_df.abs() > neural_drop_threshold).any(axis=1)
-        bad_mask = bad_audio_mask | bad_neural_mask
         
-        # Drop from both neural and audio
-        triggered_ad_df = triggered_ad_df.loc[~bad_mask]
-        triggered_neural_df = triggered_neural_df.loc[~bad_mask]
-        triggered_ad_hp_df = triggered_ad_hp_df.loc[~bad_mask]
-
-
-
-        ## Store
-        triggered_ad_l.append(triggered_ad_df)
-        triggered_ad_hp_l.append(triggered_ad_hp_df)
-        triggered_neural_l.append(triggered_neural_df)
-        keys_l.append(session_name)
-    
-    
-    ## Concat
-    big_ad = pandas.concat(triggered_ad_l, keys=keys_l, names=['session'])
-    big_ad_hp = pandas.concat(triggered_ad_hp_l, keys=keys_l, names=['session'])
-    big_neural = pandas.concat(triggered_neural_l, keys=keys_l,
-                               names=['session'])
-
-    # Add mouse and side to index of big_neural
-    to_join = metadata.set_index('session_name')[['mouse','pre_vs_post',
-                                                  'speaker_side', 'amplitude']]
-    bn_idx = big_neural.index.to_frame().reset_index(drop=True)
-    bn_idx = bn_idx.join(to_join, on='session')
-    big_neural.index = pandas.MultiIndex.from_frame(bn_idx)
-    big_neural = big_neural.reorder_levels(
-        ['mouse', 'pre_vs_post','speaker_side', 'amplitude', 'session', 'trial']).sort_index()
-
-    return big_neural,metadata,big_ad, big_ad_hp
-
-
-def parse_by_date_includeaudio(notes_directory, data_directory, datestring,
-        header_size, channels, audio_threshold, abr_params):
-    """Parses all of the LV binaries from a certain date
-
-    Arguments
-        audio_threshold : numeric
-            stimulus onsets are detected when audio data exceeds this threshold
-
-        abr_params : dict, with the following items:
-
-            audio_drop_threshold : numeric
-                Drop any trials where abs(audio data) exceeds this threshold
-
-            neural_drop_threshold : numeric
-                Drop any trials where abs(neural data) exceeds this threshold
-    """
-
-    # Unpack dicts
-    audio_drop_threshold = abr_params["audio_drop_threshold"]
-    neural_drop_threshold = abr_params["neural_drop_threshold"]
-    abr_start_sample = abr_params["abr_start_sample"]
-    abr_stop_sample = abr_params["abr_stop_sample"]
-    abr_fig_ymin_uV = abr_params["abr_fig_ymin_uV"]
-    abr_fig_ymax_uV = abr_params["abr_fig_ymax_uV"]
-    highpass_freq = abr_params["highpass_freq"]
-    lowpass_freq = abr_params["lowpass_freq"]
-    filter_type = abr_params["filter_type"]
-    abr_n_recent_trials = abr_params["abr_n_recent_trials"]
-    neural_channel = channels["neural_channel"]
-    speaker_channel = channels["speaker_channel"]
-    # Get the metadata
-    metadata = get_metadata(notes_directory, data_directory, datestring)
-    ## Load data from all files
-    # Store results here
-    triggered_ad_l = []
-    triggered_ad_hp_l = []
-    triggered_neural_l = []
-    keys_l = []
-
-    # Iterate over rows in metadata
-    for metadata_idx in metadata.index:
-        ## Get the name of the data file
-        datafile = metadata.loc[metadata_idx, 'datafile']
-        session_name = metadata.loc[metadata_idx, 'session_name']
-        print("loading {}".format(datafile))
-
-        # Skip if it doesn't exist
-        if not os.path.exists(datafile):
-            print("warning: {} does not exist".format(datafile))
-            continue
-
-            ## Open the file and read the header
-        # Read the data
-        with open(datafile, "rb") as fi:
-            data_bytes = fi.read()
-
-        # Skip if nothing
-        if len(data_bytes) == 0:
-            print("warning: {} is empty".format(datafile))
-            continue
-
-        # We need to parse the first header separately because it has data that
-        # we need to parse the rest of the packets.
-        first_header_bytes = data_bytes[:header_size]
-        first_header_info = parse_header(first_header_bytes)
-
-        # We use this a lot so extract from the dict
-        sampling_rate = first_header_info['sampling_sps']
-
-        ## Parse the entire file
-        data = parse_data(
-            data_bytes,
-            first_header_info['number_channels'],
-            first_header_info['number_samples'],
-        )
-        ## Extract the audio onsets
-        # Extract audio data
-        audio_data = data[:, speaker_channel]
-
-        # de-median it
-        audio_data = audio_data - np.median(audio_data)
-
-        # Extract onsets
-        onsets = extract_onsets_from_audio_data(
-            audio_data, audio_threshold,
-            abr_start_sample, abr_stop_sample)
-
-        # Skip if no onsets detected
-        if len(onsets) == 0:
-            print("warning: {} contains no onsets".format(datafile))
-            continue
-
-        # Extract each trigger from the raw audio
-        # A 0.1 ms click is only a few samples long, but it rings for ~3 ms at 4 kHz
-        # The first ring is 20x smaller than the click, and then it decays
-        triggered_ad = np.array([
-            audio_data[trigger + abr_start_sample:trigger + abr_stop_sample]
-            for trigger in onsets])
-
-        ## Extract neural data locked to onsets
-        # Extract data
-        neural_data = data[:, neural_channel] * 1e6
-
-        # Highpass or bandpass filter
-        nyquist_freq = sampling_rate / 2.
-        if filter_type == "highpass":
-            ahi, bhi = scipy.signal.butter(2, highpass_freq / nyquist_freq,
-                                           btype='high')
-        else:
-            ahi, bhi = scipy.signal.butter(2, [highpass_freq / nyquist_freq,
-                                               lowpass_freq / nyquist_freq],
-                                           btype='band')
-        neural_data_hp = scipy.signal.filtfilt(ahi, bhi, neural_data)
-
-        # Filter the audio data in the same way I GUESS?????
-        audio_data_hp = scipy.signal.filtfilt(ahi, bhi, audio_data)
-        triggered_ad_hp = np.array([
-            audio_data_hp[trigger + abr_start_sample:trigger + abr_stop_sample]
-            for trigger in onsets])
-        # Extract highpassed neural data around triggers
-        triggered_neural = np.array([
-            neural_data_hp[trigger + abr_start_sample:trigger + abr_stop_sample]
-            for trigger in onsets])
-
-        ## Define time course in ms
-        t_plot = np.arange(
-            abr_start_sample, abr_stop_sample) / sampling_rate * 1000
-
-        ## Dataframe the results
-        triggered_ad_df = pandas.DataFrame(triggered_ad, columns=t_plot)
-        triggered_ad_df.index.name = 'trial'
-        triggered_ad_df.columns.name = 'timepoint'
-
-        triggered_ad_hp_df = pandas.DataFrame(triggered_ad_hp, columns=t_plot)
-        triggered_ad_hp_df.index.name = 'trial'
-        triggered_ad_hp_df.columns.name = 'timepoint'
-
-        triggered_neural_df = pandas.DataFrame(triggered_neural, columns=t_plot)
-        triggered_neural_df.index.name = 'trial'
-        triggered_neural_df.columns.name = 'timepoint'
-
-        ## Remove rows with missing packets
-        # Identify rows with missing packets
-        # This is any row where the audio data exceeds audio_drop_threshold
-        # or neural data exceeds neural_drop_threshold
-        bad_audio_mask = (
-                triggered_ad_df.abs() > audio_drop_threshold).any(axis=1)
-        bad_neural_mask = (
-                triggered_neural_df.abs() > neural_drop_threshold).any(axis=1)
-        bad_mask = bad_audio_mask | bad_neural_mask
+        # The bad_neural_mask is meant to be applied to HP neural data
+        # so it is invalid here
+        bad_mask = bad_audio_mask #| bad_neural_mask
 
         # Drop from both neural and audio
         triggered_ad_df = triggered_ad_df.loc[~bad_mask]
         triggered_neural_df = triggered_neural_df.loc[~bad_mask]
-        triggered_ad_hp_df = triggered_ad_hp_df.loc[~bad_mask]
+
 
         ## Store
         triggered_ad_l.append(triggered_ad_df)
-        triggered_ad_hp_l.append(triggered_ad_hp_df)
         triggered_neural_l.append(triggered_neural_df)
         keys_l.append(session_name)
 
+
     ## Concat
-    big_ad = pandas.concat(triggered_ad_l, keys=keys_l, names=['session'])
-    big_ad_hp = pandas.concat(triggered_ad_hp_l, keys=keys_l, names=['session'])
-    big_neural = pandas.concat(triggered_neural_l, keys=keys_l,
-                               names=['session'])
-
-    # Add mouse and side to index of big_neural
-    to_join = metadata.set_index('session_name')[['mouse', 'pre_vs_post',
-                                                  'speaker_side', 'amplitude']]
-    bn_idx = big_neural.index.to_frame().reset_index(drop=True)
-    bn_idx = bn_idx.join(to_join, on='session')
-    big_neural.index = pandas.MultiIndex.from_frame(bn_idx)
-    big_neural = big_neural.reorder_levels(
-        ['mouse', 'pre_vs_post', 'speaker_side', 'amplitude', 'session',
-         'trial']).sort_index()
-
-    # Separate loud vs quiet trials and insert into all df
-    loud_ls = (big_ad > 0.3).any(axis=1).values
-    big_ad.insert(0, 'loud', loud_ls)
-    big_ad_hp.insert(0, 'loud', loud_ls)
-    big_neural.insert(0, 'loud', loud_ls)
-
-   #Prepare dfs so they can be concatted together
-    big_ad = big_ad.reset_index()
-    big_ad = big_ad.set_index(['session', 'trial', 'loud'])
-    bigad_idx = big_ad.index.to_frame().reset_index(drop=True)
-    bigad_idx = bigad_idx.join(to_join, on='session')
-    big_ad.index = pandas.MultiIndex.from_frame(bigad_idx)
-    big_ad = big_ad.reorder_levels(
-        ['mouse', 'pre_vs_post', 'speaker_side', 'amplitude', 'session',
-         'trial', 'loud']).sort_index()
-
-    big_neural = big_neural.reset_index()
-    big_neural = big_neural.set_index(['mouse', 'pre_vs_post', 'speaker_side',
-                                       'amplitude', 'session', 'trial', 'loud'])
-
-    big_ad_hp = big_ad_hp.reset_index()
-    big_ad_hp = big_ad_hp.set_index(['session', 'trial', 'loud'])
-    bigad_hp_idx = big_ad_hp.index.to_frame().reset_index(drop=True)
-    bigad_hp_idx = bigad_hp_idx.join(to_join, on='session')
-    big_ad_hp.index = pandas.MultiIndex.from_frame(bigad_hp_idx)
-    big_ad_hp = big_ad_hp.reorder_levels(
-        ['mouse', 'pre_vs_post', 'speaker_side', 'amplitude', 'session',
-         'trial', 'loud']).sort_index()
-
-    # Concat audio and neural dfs and sort indexes
-    big_concatted = pandas.concat((big_neural, big_ad),
-                                keys=['neural', 'audio'])
-    big_concatted = big_concatted.sort_index(axis=0, level=['session', 'trial'])
-    big_concatted_hp = pandas.concat((big_neural, big_ad_hp),
-                                keys=['neural', 'audio'])
-    big_concatted_hp = big_concatted_hp.sort_index(axis=0,
-                                                level=['session', 'trial'])
+    big_ad = pandas.concat(
+        triggered_ad_l, keys=keys_l, names=['session'])
+    big_neural = pandas.concat(
+        triggered_neural_l, keys=keys_l, names=['session'])
 
 
-    return big_concatted, big_concatted_hp, metadata
+    ## Return
+    return big_ad, big_neural, metadata
 
 def get_ABR_data_paths():
     computer = socket.gethostname()
