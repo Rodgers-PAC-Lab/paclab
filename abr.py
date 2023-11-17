@@ -485,10 +485,16 @@ def get_ABR_data_paths():
             ('C:/Users/kgarg/Documents/GitHub/scripts/rowan/ABR_data'))
         Pickle_directory = os.path.normpath(os.path.expanduser(
             'C:/Users/kgarg/Documents/Career/PAC Lab Stuff/ABR/Figs_Pickles/Concatted Pickles'))
+    elif computer == 'NSY-0183-PC':
+        LV_directory = 'None-- work from pickles'
+        Metadata_directory = os.path.normpath(os.path.expanduser
+            ('C:/Users/kgargiu/Documents/GitHub/scripts/rowan/ABR_data'))
+        Pickle_directory = os.path.normpath(os.path.expanduser(
+            'C:/Users/kgargiu/Documents/GitHub/pickles'))
     else:
         LV_directory = os.path.expanduser('~/mnt/cuttlefish/abr/LVdata')
         Pickle_directory = os.path.expanduser('~/mnt/cuttlefish/rowan/ABR/Figs_Pickles')
-        Metadata_directory = os.path.expanduser('~/dev/scripts/rowan/ABR_data')        
+        Metadata_directory = os.path.expanduser('~/dev/scripts/rowan/ABR_data')
     return LV_directory,Metadata_directory,Pickle_directory
 
 
