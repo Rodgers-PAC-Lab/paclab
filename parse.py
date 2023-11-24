@@ -10,32 +10,52 @@ import my
 import paclab
 import pytz
 
-def load_data(mouse_names, protocol_name='PAFT'):
+def load_data(mouse_names, protocol_name='PAFT', quiet=False, 
+    append_n_session=True):
     """Simple loading function
     
     This is intended to replace boilerplate code in loading behavior data.
+    TODO: add sound_data
     
-    Steps:
+    Steps
+    ---
         Gets path to data
         Loads munged sessions
         Calls paclab.parse.parse_sandboxes
-        Checks for duplicate sessions and prints warning
-        Adds an "n_session" column for each session
-        Returns the data unpacked from paclab.parse.parse_sandboxes
+        Checks for duplicate sessions and optionally prints warning
+        Optionally adds an "n_session" column for each session
     
-    Arguments (see paclab.parse.parse_sandboxes for details)
+    
+    Parameters
+    ---
         mouse_names : list-like
             A list of mouse names to load
+            See details in parse_sandboxes
         
-        protocol_name : string
+        protocol_name : string or None
             Which protocols to load
+            If None, load all
+            See details in parse_sandboxes
+        
+        quiet : bool
+            Passed to parse_sandboxes and identify_duplicated_sessions
+            If True, prints warning messages to stdout
+        
+        append_n_session : bool
+            If True, appends a column 'n_session' to `session_df` and 
+            `perf_metrics`
     
-    Example call:
-        perf_metrics, session_df, trial_data, poke_data = load_data(
-            mouse_names=mouse_names, protocol_name='PAFT')
     
-    Returns:
-        perf_metrics, session_df, trial_data, poke_data
+    Returns: dict with the following keys
+    ---
+        perf_metrics : DataFrame from parse_sandboxes
+        session_df : DataFrame from parse_sandboxes
+        trial_data : DataFrame from parse_sandboxes
+        poke_data : DataFrame from parse_sandboxes
+        parsing_warnings : string
+            From parse_sandboxes
+        dup_sessions_warnings : string
+            From identify_duplicated_sessions
     """
     ## Get data for parse
     # Get path to terminal data
@@ -55,6 +75,7 @@ def load_data(mouse_names, protocol_name='PAFT'):
         rename_sessions_l=rename_sessions_l,
         munged_sessions=munged_sessions,
         protocol_name=protocol_name,
+        quiet=quiet,
         )
 
     # Extract the parsed_results into their own variables
@@ -62,43 +83,35 @@ def load_data(mouse_names, protocol_name='PAFT'):
     session_df = parsed_results['session_df'].copy()
     trial_data = parsed_results['trial_data'].copy()
     poke_data = parsed_results['poke_data'].copy()
+    sound_data = parsed_results['sound_data'].copy()
+    parsing_warnings = parsed_results['txt_output'].copy()
 
-    # Identify duplicated sessions
-    n_sessions_by_date = session_df.groupby(['mouse', 'date']).size()
-    days_with_multiple_sessions = n_sessions_by_date[n_sessions_by_date > 1]
+    # Check for duplicated sessions
+    dup_sessions_warnings = identify_duplicated_sessions(
+        session_df, quiet=quiet)
+    
+    # Optionally add n_session for each mouse
+    if append_n_session:
+        # Add n_session for each mouse
+        session_df['n_session'] = -1
+        for mouse, subdf in session_df.groupby('mouse'):
+            ranked = subdf['first_trial'].rank(method='first').astype(int) - 1
+            session_df.loc[ranked.index, 'n_session'] = ranked.values
+        assert not (session_df['n_session'] == -1).any()
 
-    # Display info about problem dates
-    if len(days_with_multiple_sessions) > 0:
-        print(
-            "warning: some days have multiple sessions from the same mouse!")
-        print(
-            "for each case below, add all but one session to 'munged_sessions'")
-        print()
-        
-        # Iterate through each problem case
-        for (mouse, date) in days_with_multiple_sessions.index:
-            mouse_session_df = session_df.loc[mouse]
-            mouse_date_session_df = mouse_session_df.loc[
-                mouse_session_df['date'] == date]
-            print("{} sessions from {} on {}".format(
-                len(mouse_date_session_df),
-                mouse, date))
-            print(mouse_date_session_df[
-                ['approx_duration', 'n_trials', 'date', 'first_trial']])
-            print()
-
-    # Add n_session for each mouse
-    session_df['n_session'] = -1
-    for mouse, subdf in session_df.groupby('mouse'):
-        ranked = subdf['first_trial'].rank(method='first').astype(int) - 1
-        session_df.loc[ranked.index, 'n_session'] = ranked.values
-    assert not (session_df['n_session'] == -1).any()
-
-    # Join n_session on perf_metrics
-    perf_metrics = perf_metrics.join(session_df['n_session'])
+        # Join n_session on perf_metrics
+        perf_metrics = perf_metrics.join(session_df['n_session'])
 
     # Return data
-    return perf_metrics, session_df, trial_data, poke_data
+    return {
+        'perf_metrics': perf_metrics,
+        'session_df': session_df,
+        'trial_data': trial_data,
+        'poke_data': poke_data,
+        'sound_data': sound_data,
+        'dup_sessions_warnings': dup_sessions_warnings,
+        'parsing_warnings': parsing_warnings,
+        }
 
 def parse_sandboxes(
     path_to_terminal_data, 
@@ -893,6 +906,29 @@ def parse_sandboxes(
         }
 
 def identify_duplicated_sessions(session_df, quiet=False):
+    """Identify dates with multiple sessions from the same mouse.
+    
+    Groups `session_df` by 'mouse' and 'date' and checks if this is unique.
+    If not, generates human-readable warning messages, which may be printed
+    to stdout if `quiet` is False, and in any case are returned as a string.
+    
+    
+    Parameters
+    ---
+    session_df : DataFrame
+        From paclab.parse.parse_sandboxes
+    
+    quiet : bool
+        If True, prints messages to stdout
+        Regardless, the messages are returned as a string
+    
+    
+    Returns: string
+    ---
+        If emtpy, no duplicated sessions found.
+        Otherwise, contains human-readable warning messages.
+    
+    """
     # Store output here
     txt_output = ''
     
