@@ -84,7 +84,7 @@ def load_data(mouse_names, protocol_name='PAFT', quiet=False,
     trial_data = parsed_results['trial_data'].copy()
     poke_data = parsed_results['poke_data'].copy()
     sound_data = parsed_results['sound_data'].copy()
-    parsing_warnings = parsed_results['txt_output'].copy()
+    parsing_warnings = parsed_results['txt_output']
 
     # Check for duplicated sessions
     dup_sessions_warnings = identify_duplicated_sessions(
