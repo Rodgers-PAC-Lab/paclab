@@ -7,6 +7,111 @@ import pandas
 import glob
 import json
 import my
+import paclab
+import pytz
+
+def load_data(mouse_names, protocol_name='PAFT', quiet=False, 
+    append_n_session=True):
+    """Simple loading function
+    
+    This is intended to replace boilerplate code in loading behavior data.
+    TODO: add sound_data
+    
+    Steps
+    ---
+        Gets path to data
+        Loads munged sessions
+        Calls paclab.parse.parse_sandboxes
+        Checks for duplicate sessions and optionally prints warning
+        Optionally adds an "n_session" column for each session
+    
+    
+    Parameters
+    ---
+        mouse_names : list-like
+            A list of mouse names to load
+            See details in parse_sandboxes
+        
+        protocol_name : string or None
+            Which protocols to load
+            If None, load all
+            See details in parse_sandboxes
+        
+        quiet : bool
+            Passed to parse_sandboxes and identify_duplicated_sessions
+            If True, prints warning messages to stdout
+        
+        append_n_session : bool
+            If True, appends a column 'n_session' to `session_df` and 
+            `perf_metrics`
+    
+    
+    Returns: dict with the following keys
+    ---
+        perf_metrics : DataFrame from parse_sandboxes
+        session_df : DataFrame from parse_sandboxes
+        trial_data : DataFrame from parse_sandboxes
+        poke_data : DataFrame from parse_sandboxes
+        parsing_warnings : string
+            From parse_sandboxes
+        dup_sessions_warnings : string
+            From identify_duplicated_sessions
+    """
+    ## Get data for parse
+    # Get path to terminal data
+    path_to_terminal_data = paclab.paths.get_path_to_terminal_data()
+
+    # Munged sessions
+    munged_sessions_df = pandas.read_excel(os.path.expanduser(
+        '~/mnt/cuttlefish/shared/munged_sessions.xlsx'))
+    munged_sessions = munged_sessions_df['Session Name'].values
+    rename_sessions_l = [
+        ]
+
+    # Get parsed_results
+    parsed_results = paclab.parse.parse_sandboxes(
+        path_to_terminal_data, 
+        mouse_names=mouse_names,
+        rename_sessions_l=rename_sessions_l,
+        munged_sessions=munged_sessions,
+        protocol_name=protocol_name,
+        quiet=quiet,
+        )
+
+    # Extract the parsed_results into their own variables
+    perf_metrics = parsed_results['perf_metrics'].copy()
+    session_df = parsed_results['session_df'].copy()
+    trial_data = parsed_results['trial_data'].copy()
+    poke_data = parsed_results['poke_data'].copy()
+    sound_data = parsed_results['sound_data'].copy()
+    parsing_warnings = parsed_results['txt_output']
+
+    # Check for duplicated sessions
+    dup_sessions_warnings = identify_duplicated_sessions(
+        session_df, quiet=quiet)
+    
+    # Optionally add n_session for each mouse
+    if append_n_session:
+        # Add n_session for each mouse
+        session_df['n_session'] = -1
+        for mouse, subdf in session_df.groupby('mouse'):
+            ranked = subdf['first_trial'].rank(method='first').astype(int) - 1
+            session_df.loc[ranked.index, 'n_session'] = ranked.values
+        assert not (session_df['n_session'] == -1).any()
+
+        # Join n_session on perf_metrics
+        perf_metrics = perf_metrics.join(session_df['n_session'])
+
+    # Return data
+    return {
+        'perf_metrics': perf_metrics,
+        'session_df': session_df,
+        'trial_data': trial_data,
+        'poke_data': poke_data,
+        'sound_data': sound_data,
+        'dup_sessions_warnings': dup_sessions_warnings,
+        'parsing_warnings': parsing_warnings,
+        }
 
 def parse_sandboxes(
     path_to_terminal_data, 
@@ -105,6 +210,10 @@ def parse_sandboxes(
             TODO:
                 add "trial" as a level on the index
     """
+    ## This is used for all timestamps
+    tz = pytz.timezone('America/New_York')
+    
+    
     ## Store text output here for logging
     txt_output = ''
     
@@ -288,9 +397,14 @@ def parse_sandboxes(
 
         # Coerce timestamp to datetime
         for timestamp_column in ['timestamp_reward', 'timestamp_trial_start']:
+            # Coerce
             trial_data[timestamp_column] = (
                 trial_data[timestamp_column].apply(
                 lambda s: datetime.datetime.fromisoformat(s)))
+            
+            # Add timezone
+            trial_data[timestamp_column] = (
+                trial_data[timestamp_column].dt.tz_localize(tz))
 
         # Coerce the columns that are boolean
         bool_cols = []
@@ -307,10 +421,15 @@ def parse_sandboxes(
 
         # Coerce timestamp to datetime
         for timestamp_column in ['timestamp']:
+            # Coerce
             poke_data[timestamp_column] = (
                 poke_data[timestamp_column].apply(
                 lambda s: datetime.datetime.fromisoformat(s)))
 
+            # Add timezone
+            poke_data[timestamp_column] = (
+                poke_data[timestamp_column].dt.tz_localize(tz))
+        
         # Coerce the columns that are boolean
         bool_cols = ['first_poke', 'reward_delivered']
         for bool_col in bool_cols:
@@ -334,9 +453,14 @@ def parse_sandboxes(
 
             # Coerce timestamp to datetime
             for timestamp_column in ['locking_timestamp']:
+                # Coerce
                 sound_data[timestamp_column] = (
                     sound_data[timestamp_column].apply(
                     lambda s: datetime.datetime.fromisoformat(s)))
+                
+                # Add timezone
+                sound_data[timestamp_column] = (
+                    sound_data[timestamp_column].dt.tz_localize(tz))
 
 
         ## Append
@@ -447,10 +571,17 @@ def parse_sandboxes(
             sound_data_l, keys=keys_l, 
             names=['mouse', 'session_name', 'sound'])
     
+    # Make DataFrame from task_params and sandbox_params
     big_task_params = pandas.DataFrame.from_records(task_params_l,
         index=pandas.MultiIndex.from_tuples(keys_l, names=['mouse', 'session_name']))
     big_sandbox_params = pandas.DataFrame.from_records(sandbox_params_l,
         index=pandas.MultiIndex.from_tuples(keys_l, names=['mouse', 'session_name']))
+
+    # Set timezone
+    big_sandbox_params['hdf5_modification_time'] = (
+        big_sandbox_params['hdf5_modification_time'].dt.tz_localize(tz))
+
+    # Combine big_task_params and big_sandbox_params
     big_session_params = pandas.concat(
         [big_task_params, big_sandbox_params], axis=1, verify_integrity=True)
 
@@ -478,6 +609,36 @@ def parse_sandboxes(
         big_session_params['first_trial'])
     
     
+    ## Set protocol_name from protocol_filename where needed
+    # Before 2022-10-07, we only stored protocol_name, and aftewards
+    # we only stored protocol_filename
+    if 'protocol_filename' in big_session_params.columns:
+        # This means we are analyzing at least one session after 2022-10-07
+        if 'protocol_name' in big_session_params.columns:
+            # This means we are analyzing a mix of data before and after 10-07
+            assert ((
+                big_session_params['protocol_filename'].isnull().astype(int) + 
+                big_session_params['protocol_name'].isnull().astype(int)
+                ) == 1).all()
+        else:
+            # This means we are only analyzing data after 2022-10-07
+            # Create this column so we can assign to it below
+            big_session_params['protocol_name'] = ''
+
+        # Generate a short protocol name, which is the filename without the
+        # full path and without the extension
+        short_protocol_name = big_session_params['protocol_filename'].dropna().apply(
+            lambda s: os.path.split(s)[1].replace('.json', ''))
+        
+        # Assign this into protocol_name, which we verified above was either
+        # null for the relevant rows, or we just created the column
+        big_session_params.loc[
+            short_protocol_name.index, 'protocol_name'] = short_protocol_name.values
+    
+    # Regardless of the above, this should not be null now, unless we are
+    # analyzing REALLY old data (?)
+    assert not big_session_params['protocol_name'].isnull().any()
+
 
     ## Parse trial data further
     # Rename
@@ -745,6 +906,29 @@ def parse_sandboxes(
         }
 
 def identify_duplicated_sessions(session_df, quiet=False):
+    """Identify dates with multiple sessions from the same mouse.
+    
+    Groups `session_df` by 'mouse' and 'date' and checks if this is unique.
+    If not, generates human-readable warning messages, which may be printed
+    to stdout if `quiet` is False, and in any case are returned as a string.
+    
+    
+    Parameters
+    ---
+    session_df : DataFrame
+        From paclab.parse.parse_sandboxes
+    
+    quiet : bool
+        If True, prints messages to stdout
+        Regardless, the messages are returned as a string
+    
+    
+    Returns: string
+    ---
+        If emtpy, no duplicated sessions found.
+        Otherwise, contains human-readable warning messages.
+    
+    """
     # Store output here
     txt_output = ''
     
@@ -1144,8 +1328,7 @@ def load_data_from_all_mouse_hdf5(mouse_names, munged_sessions,
         for munged_session in munged_sessions:
             if munged_session in session_df.index.levels[1]:
                 droppable_sessions.append(munged_session)
-            else:
-                print("warning: cannot find {} to drop it".format(munged_session))
+
     if len(droppable_sessions) > 0:
         session_df = session_df.drop(droppable_sessions, level='session_name')
         trial_data = trial_data.drop(droppable_sessions, level='session_name')
