@@ -2070,6 +2070,18 @@ def generate_box_port_dir_df():
     # Concat
     box_port_dir_df = pandas.concat(ser_d, names=['box']).reset_index()
     
+    # Convert degrees to cardinal directions
+    box_port_dir_df['cardinal'] = box_port_dir_df['dir'].replace({
+        0: 'N',
+        45: 'NE',
+        90: 'E',
+        135: 'SE',
+        180: 'S',
+        225: 'SW',
+        270: 'W',
+        315: 'NW',
+        })
+    
     return box_port_dir_df
 
 def convert_port_name_to_port_dir(df):
@@ -2118,3 +2130,287 @@ def convert_port_name_to_port_dir(df):
             res[replace_col + '_dir'] = res[replace_col].replace(replacing_d)
 
     return res
+
+def load_sounds_played(h5_filename, session_start_time):
+    """Load data about the time every sound was played.
+    
+    The jack client on every child pi monitors when it is told to play sound.
+    It returns this information to the autopilot process on the child pi,
+    which forwards that information to the terminal, where it is stored
+    as "ChunkData_SoundsPlayed". 
+    
+    This function loads the "ChunkData_SoundsPlayed" record from the file. 
+    Within each row is the datetime that the message was sent, as well as the
+    audio "frame number" from jack. We use a linear fit to find a way to 
+    convert between frame numbers and datetime.
+    
+    Then we account for the fact that the sound doesn't play immediately 
+    after being entered into the buffer. It plays at the end of the current 
+    block of frames, plus N_buffer_blocks later.
+    
+    After correcting for this delay and converting from frame number to 
+    datetime, we have a pretty good estimate of when the sound came out of
+    the speaker.
+    
+    Arguments:
+        session_start_time: datetime
+            The resulting times will be given in seconds relative to this time.
+            Best choice is "trial_start" for the first trial on the parent.
+    
+    Returns: DataFrame
+        index: one for every block of frames where sound was played by any pi
+        columns: 
+            speaker_time_in_session: time when the sound (should have) come out,
+                in seconds since `session_start_time`
+            speaker_frame: frame when the sound (should have) come out
+            hash: hash of the sound being played in this block
+            pilot: pilot that played sound
+            message_dt: datetime when the message was sent
+            message_time_in_session: time when the message was sent, relative
+                to `session_start_time`
+            frames_since_cycle_start, last_frame_time, message_frame: 
+                indicates the message time in frames        
+    """
+    ## Load ChunkData_SoundsPlayed
+    # Load 
+    with tables.open_file(h5_filename) as fi:
+        sounds_played_df = pandas.DataFrame.from_records(
+            fi.root['continuous_data']['ChunkData_SoundsPlayed'][:])
+
+    # Fix some columns
+    # Decode columns that are bytes
+    for decode_col in ['equiv_dt', 'pilot']:
+        sounds_played_df[decode_col] = (
+            sounds_played_df[decode_col].str.decode('utf-8')
+            )
+
+    # Coerce timestamp to datetime
+    sounds_played_df['message_dt'] = (
+        sounds_played_df['equiv_dt'].apply(
+        lambda s: datetime.datetime.fromisoformat(s)))
+    sounds_played_df = sounds_played_df.drop('equiv_dt', axis=1)
+
+    # tz localize
+    tz = pytz.timezone('America/New_York')
+    sounds_played_df['message_dt'] = (
+        sounds_played_df['message_dt'].dt.tz_localize(tz))
+
+    # Convert equiv_dt to session_time
+    # This is necessary because we can't regress to datetime objects
+    # Here we take everything relative to session_start_time, which is a little
+    # weird because session_start_time came from a different pi (the parent)
+    # but should be okay as long as we're consistent
+    # These times should be comparable across child pis up to the precision
+    # set by chrony (a few ms)
+    sounds_played_df['message_time_in_session'] = (
+        sounds_played_df['message_dt'] - session_start_time).dt.total_seconds()
+    
+    
+    ## Account for buffering delay
+    # Calculate message_frame, the frame number at the time the message was sent
+    sounds_played_df['message_frame'] = (
+        sounds_played_df['last_frame_time'] + 
+        sounds_played_df['frames_since_cycle_start'])
+
+    # Calculate the frame when the sound comes out
+    # This will be rounded up to the next block, and then plus N_buffer_blocks
+    sounds_played_df['speaker_frame'] = (
+        (sounds_played_df['message_frame'] // 1024 + 1) * 1024
+        + 2 * 1024)
+
+    
+    ## Find the best fit between equiv_dt and message_frame
+    # Calculate the (almost linear) relationship between jack frame numbers
+    # and session time. This must be done separately for each pi since each 
+    # has its own frame clock
+    pilot2jack_frame2session_time = {}
+    for pilot, subdf in sounds_played_df.groupby('pilot'):
+        # message_frame can wrap around 2**31 to -2**31
+        subdf['message_frame'] = subdf['message_frame'].astype(np.int64)
+        #int32_info = np.iinfo(np.int32)
+        
+        # Detect by this huge ofset
+        # But I guess actually if there's any negative offset at all, we 
+        # should know this happened
+        if np.diff(subdf['message_frame']).min() < -.9 * (2**32):
+            print("warning: integer wraparound detected in message_frame")
+            fix_mask = subdf['message_frame'] < 0
+            subdf.loc[fix_mask, 'message_frame'] += 2 ** 32
+        
+        # error check
+        assert np.all(np.diff(subdf['message_frame']) > 0)
+        
+        # Fit from message_frame to session time
+        pilot2jack_frame2session_time[pilot] = scipy.stats.linregress(
+            subdf['message_frame'].values,
+            subdf['message_time_in_session'].values,
+        )
+
+        # This should be extremely good because it's fundamentally a link between
+        # a time coming from datetime.datetime.now() and a time coming from 
+        # jackaudio's frame measurement on the same pi
+        # If not, probably an xrun or jack restart occurred
+        # 2023-10-30 this got to 1e-10 on 2023-10-25-14-44-43-228389_Fig_BrownLP
+        if (1 - pilot2jack_frame2session_time[pilot].rvalue) > 1e-9:
+            print("warning: rvalue was {:.3f} on {}".format(
+                pilot2jack_frame2session_time[pilot].rvalue,
+                pilot))
+            print("speaker_time_in_session will be inaccurate")
+        
+        # It appears the true sampling rate of the Hifiberry is ~192002
+        # 1/pilot2jack_frame2session_time[pilot].slope
+
+
+    ## Use that fit to estimate when the sound played in the session timebase
+    speaker_time_l = []
+    for pilot, subdf in sounds_played_df.groupby('pilot'):
+        # Convert speaker_time_jack to behavior_time_rpi01
+        speaker_time = np.polyval([
+            pilot2jack_frame2session_time[pilot].slope,
+            pilot2jack_frame2session_time[pilot].intercept,
+            ], subdf['speaker_frame'])
+        
+        # Store these
+        speaker_time_l.append(pandas.Series(speaker_time, index=subdf.index))
+
+    # Concat the results and add to sounds_played_df
+    concatted = pandas.concat(speaker_time_l)
+    sounds_played_df['speaker_time_in_session'] = concatted
+
+    return sounds_played_df
+
+def load_flash_df(h5_filename):
+    """Load the flash times from the HDF5 file
+    
+    On each trial, the parent pi sends a trial start signal to each of the
+    four child pis. When they receive it, they flash the LEDs in their
+    left and right pokes. We use this flash to synchronize the datastreams,
+    because the flash is visible in the video, and also we record the flash
+    pulse from one particular pi as an analog input. 
+    
+    Once the pi receives the trial start signal, it sends a message to the
+    terminal containing the timestamp that it receved the signal. These
+    timestamps are stored in the HDF5 file. The pis receive the signal
+    at slightly different times from each other, because the parent sends
+    the signal to each one in turn, and the network delays are unpredictable.
+    
+    This function loads the records "dt_flash_received" and
+    "dt_flash_received_from" from the HDF5 file. These are reshaped into
+    trial number on the index and rpi name on the columns. This assumes that
+    each pi sent a message on every trial, otherwise this will get messed up.
+    As a check for this, we make sure that there's never more than a 200 ms
+    difference between the last pi and the first pi on any trial.
+    
+    Returns : DataFrame
+        index: trial number
+        columns: rpi name, such as ('rpi01', 'rpi02', 'rpi03', 'rpi04')
+        values: the datetime that the message was received by each pi
+    """
+    # Load flash times
+    with tables.open_file(h5_filename) as fi:
+        dt_flash_received = pandas.DataFrame.from_records(
+            fi.root['continuous_data']['dt_flash_received'][:])
+        dt_flash_received_from = pandas.DataFrame.from_records(
+            fi.root['continuous_data']['dt_flash_received_from'][:])
+
+    # Form flash times into a single dataframe
+    # timestamp and timestamp2 are just the times when the parent received the msg
+    flash_df = pandas.concat([
+        dt_flash_received.rename(columns={'timestamp': 'timestamp2'}), 
+        dt_flash_received_from,
+        ], axis=1).rename(columns={'dt_flash_received_from': 'pilot'})
+    assert (flash_df['timestamp'] == flash_df['timestamp2']).all()
+
+    # Fix cols
+    for decode_col in flash_df.columns:
+        flash_df[decode_col] = (
+            flash_df[decode_col].str.decode('utf-8')
+            )
+    for dt_col in ['dt_flash_received', 'timestamp']:
+        flash_df[dt_col] = (
+            flash_df[dt_col].apply(
+            lambda s: datetime.datetime.fromisoformat(s)))
+
+    # drop useless cols
+    flash_df = flash_df.drop(['timestamp', 'timestamp2'], axis=1)
+
+    # rearrange, assuming we got all 4 on all trials
+    flash_df = flash_df.groupby('pilot').apply(
+        lambda df: df['dt_flash_received'].sort_values().reset_index()
+        ).drop('index', axis=1)['dt_flash_received'].unstack('pilot')
+
+    # check that this worked, we're not mixing across trials
+    assert (flash_df.max(1) - flash_df.min(1)).abs().max().total_seconds() < .2
+
+    # Localize
+    tz = pytz.timezone('America/New_York')
+    for colname in flash_df.columns:
+        flash_df[colname ] = flash_df[colname].dt.tz_localize(tz)
+
+    # these are real trial numbers, unless we missed the first one before recording started
+    flash_df.index.name = 'trial'
+    
+    return flash_df
+
+def process_session_sound_data(session_sound_data, session_trial_data):
+    """Given the parsed session_sound_data, calculate when the sounds played
+    
+    Returns: DataFrame
+        session_sound_data with 'absolute_time' column added
+    """
+    # Make a copy
+    session_sound_data = session_sound_data.copy()
+    session_trial_data = session_trial_data.copy()
+    
+    # This assumes that every trial occurs as exactly one locking_timestamp
+    # which is probably true
+    session_sound_data['trial'] = session_sound_data['locking_timestamp'].rank(
+        method='dense').astype(int) - 1
+
+    # The last trial probably didn't get completed (although it could have)
+    # So there will be sounds but no trial info
+    assert session_sound_data['trial'].max() == len(session_trial_data)
+
+    # Check how close the known trial time is to the locking timestamp
+    # Typically locking_timestamp seems to be 350-600ms after trial_start
+    session_sound_data['trial_start'] = session_sound_data['trial'].map(session_trial_data['trial_start'])
+    session_sound_data['latency'] = session_sound_data['trial_start'] - session_sound_data['locking_timestamp']
+    session_trial_data['latency'] = -session_sound_data.groupby('trial')['latency'].mean()
+
+    # Some pis might be slightly faster than others, but only by ~30 ms
+    latency_by_port = session_trial_data.groupby('rewarded_port')['latency'].mean().sort_values()
+
+    # Drop this for sanity
+    session_sound_data = session_sound_data.drop('latency', axis=1)
+
+    # Reconstruct the sound time
+    # 'relative_time' is what was drawn from the distr, but 'gap_chunks' is what
+    # was actually used, and is rounded/quantized.
+    # When drawing from the distr, the duration of the sound was ignored,
+    # so everything is slightly off
+    # Also, the gap is AFTER the sound, not before. Ie the first entry in the
+    # sound_cycle is a sound, not a gap.
+    ssd2_l = []
+    for trial, sub_session_sound_data in session_sound_data.groupby('trial'):
+        ssd2 = sub_session_sound_data.copy()
+        
+        # Calculate the time in chunks of each sound, accounting for the fact
+        # that the sound itself is 2 chunks long
+        # and also accounting for the fact that the first sound plays at time zero
+        ssd2['gaptime'] = (ssd2['gap_chunks'] + 2).cumsum().shift().fillna(0).astype(int)
+        ssd2['gaptime_s'] = ssd2['gaptime'] * 1024 / 192000
+
+        # Save
+        ssd2_l.append(ssd2)
+
+    # Reconstitute
+    new_session_sound_data = pandas.concat(ssd2_l)
+        
+    # Calculate the absolute time of each sound, using the locking timestamp
+    # and the newly calculated and corrected gaptime
+    # TODO: account for the fact that the sounds repeat after the first cycle
+    session_sound_data['absolute_time'] = (
+        session_sound_data['locking_timestamp'] + 
+        new_session_sound_data['gaptime_s'].apply(lambda x: datetime.timedelta(seconds=x)))
+    
+    return session_sound_data
