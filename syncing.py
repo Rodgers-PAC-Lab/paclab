@@ -1,8 +1,14 @@
+# These are annoying dependencies so don't import syncing by default it __init__
+import ns5_process.AudioTools
+import MCwatch.behavior
+import scipy.signal
+
 def get_trial_start_times(trial_start_signal, analog_fs=25000.):
     """Return the time (in seconds) of each trial start pulse"""
     # Also parse trial start signals
     # These are currently set to 100 ms, 
     # but on average are 115 ms, and can be up to 150 ms
+    # or 250 ms in the case of 2023-12-07_15-37-49
     # 2023-07-14: Now mostly between 105 and 120 ms, with a few outliers up to 130 ms
     # 2023-10-30: a weird one at the beginning that was split into two pulses,
     #   the first of which was only 62 ms? Actually I think that's a startup pulse

@@ -9,6 +9,7 @@ import json
 import my
 import paclab
 import pytz
+import scipy.stats
 
 def load_data(mouse_names, protocol_name='PAFT', quiet=False, 
     append_n_session=True):

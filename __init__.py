@@ -6,3 +6,4 @@ from . import paths
 from . import parse
 from . import sleap
 from . import behavior
+from . import neural
