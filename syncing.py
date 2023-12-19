@@ -33,11 +33,24 @@ def get_trial_start_times(trial_start_signal, analog_fs=25000.):
     return analog_trial_start_times_s
 
 def get_actual_sound_times(speaker_signal, threshhold=50, analog_fs=25000.,
-    minimum_duration_ms=5, prefilter_highpass=500):
+    minimum_duration_ms=5, prefilter_highpass=500, return_as_dict=True):
     """Identify sound times in the actual speaker signal
     
-    Returns: actual_sound_times, actual_sound_durations
-        Both are in seconds
+    speaker_signal : raw data from speaker
+    threshold : float
+        Always overwrites the od threshold manually
+    analog_fs : sampling rate of speaker_signal
+    minimum_duraion_ms: shorter than this is discarded
+    prefilter_highpass : float
+    return_as_dict : bool
+        if True, return data as dict
+        False is obsolete
+    
+    Returns: dict
+        'onset_times': onset times in seconds
+        'durations': in seconds
+        'od': the OnsetDetector object
+
     """
     # Identify the onsets by squaring and smoothing
     # Typical sound is about 320 samples long, or 13 ms
@@ -70,5 +83,13 @@ def get_actual_sound_times(speaker_signal, threshhold=50, analog_fs=25000.,
     # Calculate sound times
     actual_sound_times = od.detected_onsets / analog_fs
     actual_sound_durations = (od.detected_offsets - od.detected_onsets) / analog_fs
-
-    return actual_sound_times, actual_sound_durations
+    
+    if return_as_dict:
+        return {
+            'onset_times': actual_sound_times,
+            'durations': actual_sound_durations,
+            'od': od,
+            }
+    else:
+        return actual_sound_times, actual_sound_durations
+    
