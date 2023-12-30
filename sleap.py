@@ -1,7 +1,9 @@
-## This is for functions for dealing withi SLEAP data
+## This is for functions for dealing with SLEAP data
 
 import tables
 import pandas
+import matplotlib.pyplot as plt
+import my.plot
 
 def load_tracked_sleap_data(hdf5_filename):
     """Load tracks and scores from sleap HDF5 file
@@ -95,3 +97,144 @@ def load_tracked_sleap_data(hdf5_filename):
         'scores_df': scores_df,
         'edge_names': edge_names,
         }
+
+def plot_example_frame(
+    frame, 
+    frame_tracks=None, 
+    xlims='from_octagon', 
+    ylims='from_octagon', 
+    dpi=100, 
+    edge_names=None, 
+    octagon_keypoints=None,
+    ):
+    """Plot example frame with overlaid tracks, filling the plt window
+    
+    frame : 2d numpy array
+        The image to plot
+    frame_tracks : DataFrame or None
+        If not None, this should contain keypoints on the mouse, with
+        columns 'x' and 'y'
+    xlims : 'from_octagon', tuple, or None
+        If tuple, the image is cropped to these xlims
+        If 'from_octagon' and octagon_keypoints is not None, the xlims
+        are taken from the west and east ports
+        If None, no cropping
+    ylims : similar to xlims
+    dpi : float
+        The figsize of the figure is the range defined by xlims and ylims,
+        divided by this value. Higher values simply make the figure smaller,
+        not more detailed
+    edge_names : None or list of list of paired nodes
+        If None, a default matching our current SLEAP model is used
+    octagon_keypoints : None or DataFrame
+        If not None, the edges and ports of the octagon are plotted
+        It should have 'x' and 'y' on the columns
+    
+    Returns : plt.Figure
+    """
+    # Default edge_names
+    if edge_names is None:
+        edge_names = [
+            ['mid_back', 'tail_base'],
+            ['snout', 'mid_ears'],
+            ['mid_ears', 'mid_back'],
+            ['L ear', 'mid_ears'],
+            ['R ear ', 'mid_ears'],
+            ['L ear', 'snout'],
+            ['R ear ', 'snout'],
+            ['L forelimb', 'L thigh'],
+            ['R forelimb', 'R thigh'],
+            ['L thigh', 'tail_base'],
+            ['R thigh', 'tail_base'],
+            ['L forelimb', 'mid_ears'],
+            ['R forelimb', 'mid_ears'],
+            ['L thigh', 'mid_back'],
+            ['R thigh', 'mid_back'],
+            ['R forelimb', 'mid_back'],
+            ['L forelimb', 'mid_back'],
+            ['tail_base', 'tail_1'],
+            ['tail_3', 'tail_end'],
+            ['tail_1', 'tail_mid'],
+            ['tail_mid', 'tail_3'],
+            ]
+    
+    # Default lims
+    if xlims is None:
+        xlims = (0, frame.shape[1])
+    elif xlims == 'from_octagon' and octagon_keypoints is not None:
+        xlims = (
+            octagon_keypoints.loc['W', 'x'] - 10,
+            octagon_keypoints.loc['E', 'x'] + 10,
+            )            
+    
+    if ylims is None:
+        ylims = (0, frame.shape[0])
+    elif ylims == 'from_octagon' and octagon_keypoints is not None:
+        # The ypos of S is greater than that of N
+        ylims = (
+            octagon_keypoints.loc['N', 'y'] - 10,
+            octagon_keypoints.loc['S', 'y'] + 10,
+            )
+
+    # Convert lims to shape
+    xwidth = xlims[1] - xlims[0]
+    ywidth = ylims[1] - ylims[0]        
+    
+    # Plot
+    f, ax = plt.subplots(figsize=(xwidth/dpi, ywidth/dpi))
+    f.subplots_adjust(left=0, right=1, bottom=0, top=1)
+    
+    # Plot image
+    im = my.plot.imshow(frame, cmap=plt.cm.gray, ax=ax)
+    im.set_clim((0, 255))
+    
+    # Plot tracks
+    if frame_tracks is not None:
+        ax.plot(frame_tracks['x'], frame_tracks['y'], marker='o', color='green', mfc='none', ms=4, ls='none')
+
+        # Plot edges
+        for edge in edge_names:
+            # Get the keypoints for this individual edge
+            edge_keypoints = frame_tracks.loc[edge]
+            
+            # Plot them
+            ax.plot(edge_keypoints['x'], edge_keypoints['y'], '-', color='green')
+
+    # Plot octagon
+    outer = ['NNEO', 'ENEO', 'ESEO', 'SSEO', 'SSWO', 'WSWO', 'WNWO', 'NNWO']
+    inner = ['NNEI', 'ENEI', 'ESEI', 'SSEI', 'SSWI', 'WSWI', 'WNWI', 'NNWI']
+    ports = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
+
+    # Plot octagon
+    if octagon_keypoints is not None:
+        for n in range(len(outer)):
+            corner0 = outer[n]
+            if n == len(outer) - 1:
+                corner1 = outer[0]
+            else:
+                corner1 = outer[n + 1]
+
+            # Connect the outers
+            topl = octagon_keypoints.loc[[corner0, corner1], ['x', 'y']].values
+            ax.plot(topl[:, 0], topl[:, 1], 'k-', lw=.75)
+            
+            # Connect outer to inner
+            inner_corner = inner[n]
+            topl = octagon_keypoints.loc[[corner0, inner_corner], ['x', 'y']].values
+            ax.plot(topl[:, 0], topl[:, 1], 'k-', lw=.75)
+            
+            # Plot port
+            port_loc = octagon_keypoints.loc[ports[n], ['x', 'y']].values
+            ax.plot([port_loc[0]], [port_loc[1]], color='gray', marker='s')    
+
+    # Apply the crop and invert the ylims (image-like)
+    ax.set_xlim(xlims)
+    ax.set_ylim(ylims[::-1])
+    
+    # Remove frame
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_frame_on(False)
+    
+    # Return
+    return f
