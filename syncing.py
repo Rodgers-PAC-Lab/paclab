@@ -33,7 +33,8 @@ def get_trial_start_times(trial_start_signal, analog_fs=25000.):
     return analog_trial_start_times_s
 
 def get_actual_sound_times(speaker_signal, threshhold=50, analog_fs=25000.,
-    minimum_duration_ms=5, prefilter_highpass=500, return_as_dict=True):
+    minimum_duration_ms=5, prefilter_highpass=500, return_as_dict=True,
+    verbose=True):
     """Identify sound times in the actual speaker signal
     
     speaker_signal : raw data from speaker
@@ -65,7 +66,7 @@ def get_actual_sound_times(speaker_signal, threshhold=50, analog_fs=25000.,
     od = ns5_process.AudioTools.OnsetDetector(
         hp, 
         F_SAMP=analog_fs, 
-        verbose=True, 
+        verbose=verbose, 
         plot_debugging_figures=False,
         minimum_threshhold=None,
         minimum_duration_ms=minimum_duration_ms,
