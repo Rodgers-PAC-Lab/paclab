@@ -179,6 +179,9 @@ def match_videos_with_behavior(video_dir, session_df, quiet=False):
 
 
     ## Align sessions and videos
+    # Drop any missing sandbox_creation_time or this won't work
+    session_df = session_df[~session_df['sandbox_creation_time'].isnull()]
+    
     # Use sandbox_creation_time to avoid the latency of the person entering 
     # the mouse weight
     behavior_time = session_df[
