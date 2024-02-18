@@ -2224,7 +2224,10 @@ def load_sounds_played(h5_filename, session_start_time):
     # Calculate the (almost linear) relationship between jack frame numbers
     # and session time. This must be done separately for each pi since each 
     # has its own frame clock
+    #
+    # In the course of this fit, we also fix wraparound issues
     pilot2jack_frame2session_time = {}
+    new_sounds_played_df_l = []
     for pilot, subdf in sounds_played_df.groupby('pilot'):
         ## Deal with wraparound
         # message_frame can wrap around 2**31 to -2**31
@@ -2261,9 +2264,6 @@ def load_sounds_played(h5_filename, session_start_time):
                 "out of order by at worst {} frames".format(diff_time.min())
                 )
         
-        # error check
-        #assert np.all(np.diff(subdf['message_frame']) > 0)
-        
         
         ## Fit from message_frame to session time
         pilot2jack_frame2session_time[pilot] = scipy.stats.linregress(
@@ -2284,6 +2284,18 @@ def load_sounds_played(h5_filename, session_start_time):
         
         # It appears the true sampling rate of the Hifiberry is ~192002
         # 1/pilot2jack_frame2session_time[pilot].slope
+
+        
+        ## Store the version with times fixed for wraparound
+        new_sounds_played_df_l.append(subdf)
+    
+    # Reconstruct sounds_played_df
+    # The ordering is now explicitly sorted by message_frame, whereas before
+    # it was sorted by pilot (and I am not sure if it was guaranteed to
+    # be sorted by message time within that)
+    # Also, message_frame and speaker_frame are now int64 and wraparound-free
+    sounds_played_df = pandas.concat(new_sounds_played_df_l).sort_values(
+        'message_frame')
 
 
     ## Use that fit to estimate when the sound played in the session timebase
