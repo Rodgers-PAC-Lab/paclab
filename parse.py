@@ -2171,6 +2171,8 @@ def load_sounds_played(h5_filename, session_start_time):
                 to `session_start_time`
             frames_since_cycle_start, last_frame_time, message_frame: 
                 indicates the message time in frames        
+        
+        This DataFrame will be sorted by the column "message_dt"
     """
     ## Load ChunkData_SoundsPlayed
     # Load 
@@ -2205,6 +2207,16 @@ def load_sounds_played(h5_filename, session_start_time):
     # set by chrony (a few ms)
     sounds_played_df['message_time_in_session'] = (
         sounds_played_df['message_dt'] - session_start_time).dt.total_seconds()
+    
+    
+    ## Drop sounds before the session started
+    # This shouldn't be possible, but for some reason there are sounds from
+    # before the session started. Maybe a leftover network packet?
+    drop_mask = sounds_played_df['message_time_in_session'] < 0
+    if drop_mask.any():
+        print("warning: dropping {} sounds from before session started".format(
+            drop_mask.sum()))
+        sounds_played_df = sounds_played_df[~drop_mask].copy()
     
 
     ## Account for buffering delay
@@ -2290,12 +2302,12 @@ def load_sounds_played(h5_filename, session_start_time):
         new_sounds_played_df_l.append(subdf)
     
     # Reconstruct sounds_played_df
-    # The ordering is now explicitly sorted by message_frame, whereas before
+    # The ordering is now explicitly sorted by message_dt, whereas before
     # it was sorted by pilot (and I am not sure if it was guaranteed to
     # be sorted by message time within that)
     # Also, message_frame and speaker_frame are now int64 and wraparound-free
     sounds_played_df = pandas.concat(new_sounds_played_df_l).sort_values(
-        'message_frame')
+        'message_dt')
 
 
     ## Use that fit to estimate when the sound played in the session timebase
