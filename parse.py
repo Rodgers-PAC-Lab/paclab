@@ -2206,7 +2206,7 @@ def load_sounds_played(h5_filename, session_start_time):
     sounds_played_df['message_time_in_session'] = (
         sounds_played_df['message_dt'] - session_start_time).dt.total_seconds()
     
-    
+
     ## Account for buffering delay
     # Calculate message_frame, the frame number at the time the message was sent
     sounds_played_df['message_frame'] = (
@@ -2226,22 +2226,46 @@ def load_sounds_played(h5_filename, session_start_time):
     # has its own frame clock
     pilot2jack_frame2session_time = {}
     for pilot, subdf in sounds_played_df.groupby('pilot'):
+        ## Deal with wraparound
         # message_frame can wrap around 2**31 to -2**31
         subdf['message_frame'] = subdf['message_frame'].astype(np.int64)
         #int32_info = np.iinfo(np.int32)
         
-        # Detect by this huge ofset
-        # But I guess actually if there's any negative offset at all, we 
-        # should know this happened
+        # Detect by this huge offset
+        # There can occasionally be small offsets (see below)
         if np.diff(subdf['message_frame']).min() < -.9 * (2**32):
             print("warning: integer wraparound detected in message_frame")
             fix_mask = subdf['message_frame'] < 0
+            
+            # Fix both message_frame and speaker_frame
             subdf.loc[fix_mask, 'message_frame'] += 2 ** 32
+            subdf.loc[fix_mask, 'speaker_frame'] += 2 ** 32
+        
+        
+        ## Error check ordering
+        # It is not actually guaranteed that the messages arrive in order
+        # 2023-11-29-17-01-27-212505_Fig_BrownLP
+        # In one (rare?) case, there were two rows from the same pilot
+        # with the same 'speaker_frame' but with two different 'message_frame'
+        # Maybe somehow it was trying to play two sounds at once?        
+        # And the later one was processed first
+        # Warn when this happens
+        # As long as its less than a blocksize it's probably (?) okay
+        # Certainly indicates the fit can't be perfectly linear, it's not even
+        # monotonic
+        diff_time = np.diff(subdf['message_frame'])
+        n_out_of_order = np.sum(diff_time < 0)
+        if n_out_of_order > 0:
+            print(
+                "warning: {} rows of sounds_played_df ".format(n_out_of_order) +
+                "out of order by at worst {} frames".format(diff_time.min())
+                )
         
         # error check
-        assert np.all(np.diff(subdf['message_frame']) > 0)
+        #assert np.all(np.diff(subdf['message_frame']) > 0)
         
-        # Fit from message_frame to session time
+        
+        ## Fit from message_frame to session time
         pilot2jack_frame2session_time[pilot] = scipy.stats.linregress(
             subdf['message_frame'].values,
             subdf['message_time_in_session'].values,
