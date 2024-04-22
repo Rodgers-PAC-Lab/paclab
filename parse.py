@@ -10,9 +10,15 @@ import my
 import paclab
 import pytz
 import scipy.stats
+import tqdm
 
-def load_data(mouse_names, protocol_name='PAFT', quiet=False, 
-    append_n_session=True):
+def load_data(
+    include_sessions=None, 
+    mouse_names=None, 
+    protocol_name='PAFT', 
+    quiet=False, 
+    append_n_session=True,
+    ):
     """Simple loading function
     
     This is intended to replace boilerplate code in loading behavior data.
@@ -29,6 +35,10 @@ def load_data(mouse_names, protocol_name='PAFT', quiet=False,
     
     Parameters
     ---
+        include_sessions : list-like or None
+            A list of sessions to include
+            See deatils in parse_sandboxes
+        
         mouse_names : list-like
             A list of mouse names to load
             See details in parse_sandboxes
@@ -72,6 +82,7 @@ def load_data(mouse_names, protocol_name='PAFT', quiet=False,
     # Get parsed_results
     parsed_results = paclab.parse.parse_sandboxes(
         path_to_terminal_data, 
+        include_sessions=include_sessions,
         mouse_names=mouse_names,
         rename_sessions_l=rename_sessions_l,
         munged_sessions=munged_sessions,
@@ -114,14 +125,309 @@ def load_data(mouse_names, protocol_name='PAFT', quiet=False,
         'parsing_warnings': parsing_warnings,
         }
 
+def choose_sandboxes_to_enter(
+    sandbox_root_dir, 
+    include_sessions=None, 
+    mouse_names=None, 
+    munged_sessions=None):
+    """Identify which sandboxes to enter
+    
+    sandbox_root_dir : str
+    
+    include_sessions, mouse_names, munged_sessions :
+        passed directly from parse_sandboxes
+    
+    Returns: DataFrame
+        columns:
+            full_path : full path to sandbox
+            sandbox_name : name of sandbox (last bit of full_path)
+            sandbox_dt_string, mouse_name : extracted from sandbox_name
+            in_munged : True if in munged_sessions
+            enter_sandbox : True if should be entered
+                This will be True based on include_sessions, mouse_names,
+                and munged_sessions
+    """
+    
+    # Get list of available sandbox directories
+    sandbox_dir_l = sorted(
+        map(os.path.abspath, glob.glob(os.path.join(sandbox_root_dir, '*/'))))
+    
+    # Form DataFrame
+    sandbox_df = pandas.Series(sandbox_dir_l).rename('full_path').to_frame()
+    
+    # Extract sandbox name
+    # This works because of abspath above
+    sandbox_df['sandbox_name'] = sandbox_df['full_path'].apply(
+        lambda s: os.path.split(s)[1])
+    
+    # Extract sandbox_dt_string and mouse name
+    sandbox_df['sandbox_dt_string'] = sandbox_df['sandbox_name'].str[:26]
+    sandbox_df['mouse_name'] = sandbox_df['sandbox_name'].str[27:]
+    
+    # Decide whether to include via `include_sessions` or `mouse_names`
+    # It's not clear what makes sense if both are specified, so in that
+    # case just ignore `mouse_names`.
+    if include_sessions is not None:
+        # In this case, include only the requested sessions
+        sandbox_df['enter_sandbox'] = sandbox_df['sandbox_name'].isin(
+            include_sessions)
+    
+    elif mouse_names is not None:
+        # In this case, include all sessions from these mice
+        sandbox_df['enter_sandbox'] = sandbox_df['mouse_name'].isin(
+            mouse_names)
+    
+    else:
+        # While technically they may want to load everything, in practice
+        # this is much more likely to be a mistake
+        raise ValueError(
+            "at least one of `include_sessions` or `mouse_names` "
+            "must be specified")
+
+    # Identify munged
+    if munged_sessions is not None:
+        sandbox_df['in_munged'] = sandbox_df['sandbox_name'].isin(
+            munged_sessions)
+    else:
+        sandbox_df['in_munged'] = np.zeros(len(sandbox_df), dtype=bool)
+
+    # Mask "enter_sessions" by not "in_munged"
+    sandbox_df['enter_sandbox'] = (
+        sandbox_df['enter_sandbox'] & ~sandbox_df['in_munged'])
+    
+    return sandbox_df
+
+def check_for_corrupted_trial_data(
+    sandbox_name,
+    trial_data,
+    txt_output,
+    quiet,
+    ):
+    """Check for corrupted trials
+    
+    sandbox_name : sandbox name
+    trial_data : trial data
+    txt_output : string
+        This is a list of all error messages so far
+        It may be appended to
+    quiet : if True, print to stdout
+    
+    Checks for the following:
+        * Any trial whose timestamp_trial_start is b''
+          If so, it is dropped
+        * Extraneous trial numbers - anything outside the range from
+          0 to length of trial_data
+        * Missing trial numbers - anything not in that range
+        * Duplicate trial numbers
+    
+    The only time trials are dropped is the first case, because
+    a busted timestamp will cause other problems downstream
+    
+    Returns: txt_output, trial_data
+        txt_output may have new errors appended
+        trial_data may have rows dropped
+    """
+    # Check for blank start times
+    # This seems to co-occur with missing trials, e.g. the first row
+    # is corrupted like this, and then the second row is trial 10 or 
+    # whatever. In recent memory this has only happened on 2023-02-16
+    blank_start_time_mask = trial_data['timestamp_trial_start'] == b''
+    if np.any(blank_start_time_mask):
+        # Form the text to print
+        txt_to_print = (
+            'warning: {} has blank start times. dropping\n'.format(
+            sandbox_name))
+        
+        # Do the drop
+        trial_data = trial_data[~blank_start_time_mask].copy()
+        
+        # Print if no quiet
+        if not quiet:
+            print(txt_to_print.strip())
+        
+        # Store the text
+        txt_output += txt_to_print
+
+    # This is which trials we *should* find
+    correct_range = np.array(
+        range(trial_data['trial_in_session'].max() + 1))
+    
+    # These are trials that were found, but should not be there
+    # I don't think this is actually possible unless there are negative
+    # trial numbers
+    extraneous_trials_mask = ~np.isin(
+        trial_data['trial_in_session'].values, correct_range)
+    
+    if np.any(extraneous_trials_mask):
+        txt_to_print = ('warning: {} has extraneous trials: {}\n'.format(
+            sandbox_name,
+            trial_data['trial_in_session'].values[extraneous_trials_mask]))
+        if not quiet:
+            print(txt_to_print.strip())
+        txt_output += txt_to_print
+
+    # These are trials that were not found, but should have been
+    trials_not_found_mask = ~np.isin(
+        correct_range, trial_data['trial_in_session'].values)
+    
+    if np.any(trials_not_found_mask):
+        txt_to_print = ('warning: {} has missing trials: {}\n'.format(
+            sandbox_name,
+            correct_range[trials_not_found_mask]))            
+        if not quiet:
+            print(txt_to_print.strip())
+        txt_output += txt_to_print            
+
+    # These are trial numbers that occurred more than once
+    duplicate_trials_mask = trial_data['trial_in_session'].duplicated()
+    
+    if np.any(duplicate_trials_mask):
+        txt_to_print = ('warning: {} has duplicate trials: {}\n'.format(
+            sandbox_name,
+            trial_data['trial_in_session'].values[duplicate_trials_mask],
+            ))
+        if not quiet:
+            print(txt_to_print.strip())
+        txt_output += txt_to_print            
+
+    return txt_output, trial_data
+
+def decode_and_coerce_df(
+    df,
+    columns_to_decode,
+    columns_to_timestamp,
+    columns_to_bool,
+    tz,
+    ):
+    """Decode and coerce columns
+    
+    df : DataFrame
+    columns_to_decode : list of str
+        All of these will be decode('utf-8')
+    columns_to_timestamp : list of str
+        All of these will be converted to datetime and localized to tz
+    columns_to_bool : list of str
+        All of these will be converted 'True' to True
+    
+    Returns: new version of df
+    """
+    for decode_col in columns_to_decode:
+        df[decode_col] = df[decode_col].str.decode('utf-8')
+    
+    for timestamp_col in columns_to_timestamp:
+        df[timestamp_col] = df[timestamp_col].apply(
+            datetime.datetime.fromisoformat).dt.tz_localize(tz)
+    
+    for bool_col in columns_to_bool:
+        df[bool_col] = df[bool_col].replace({
+            'True': True, 'False': False}).astype(bool)
+    
+    return df
+
+def handle_sandbox_error_messages(
+    skipped_for_broken_hdf5,
+    skipped_for_no_trials,
+    skipped_for_no_pokes,
+    txt_output,
+    quiet,
+    ):
+    """Set up error messages
+    
+    If there is anything in the first three lists, they will be formatted
+    and added to txt_output. Also if not quiet, they will be printed
+    
+    Returns: txt_output
+        May have new messages appended
+    """
+    if len(skipped_for_broken_hdf5) > 0:
+        txt_to_print = (
+            "warning: skipped the following sessions with broken HDF5, "
+            "these should be added to 'munged_sessions:'\n")
+            
+        for session_name in skipped_for_broken_hdf5:
+            txt_to_print += ('"{}",'.format(session_name)) + '\n'
+            
+        txt_to_print += '\n'
+        
+        if not quiet:
+            print(txt_to_print)
+        txt_output += txt_to_print            
+        
+    if len(skipped_for_no_trials) > 0:
+        txt_to_print = (
+            "warning: skipped the following sessions with zero trials, "
+            "these should be added to 'munged_sessions:'\n")
+            
+        for session_name in skipped_for_no_trials:
+            txt_to_print += ('"{}",'.format(session_name)) + '\n'
+
+        txt_to_print += '\n'
+        
+        if not quiet:
+            print(txt_to_print)
+        txt_output += txt_to_print            
+    
+    if len(skipped_for_no_pokes) > 0:
+        txt_to_print = (
+            "warning: skipped the following sessions with zero pokes, "
+            "these should be added to 'munged_sessions:'\n")
+            
+        for session_name in skipped_for_no_pokes:
+            txt_to_print += ('"{}",'.format(session_name)) + '\n'
+
+        txt_to_print += '\n'
+        
+        if not quiet:
+            print(txt_to_print)
+        txt_output += txt_to_print            
+    
+    return txt_output
+
+def warn_if_no_mouse_found(
+    mouse_names,
+    all_encountered_mouse_names,
+    txt_output,
+    quiet,
+    ):
+    """Warn if no mice were found
+    
+    mouse_names : list of mouse looked for
+    all_encountered_mouse_names : list of mice founod
+    txt_output : str to append to
+    quiet : bool
+    
+    Returns: txt_output
+        May have warning appended
+    """
+    if mouse_names is not None:
+        missing_mice = []
+        for mouse in mouse_names:
+            if mouse not in all_encountered_mouse_names:
+                missing_mice.append(mouse)
+        if len(missing_mice) > 0:
+            txt_to_print = "warning: the following mice were not found:\n"
+            txt_to_print += "\n".join(missing_mice)
+            txt_to_print += '\n'
+            txt_to_print += "did you mean one of the following?\n"
+            txt_to_print += ", ".join(sorted(all_encountered_mouse_names)) + '\n'
+            txt_to_print += '\n'
+
+            if not quiet:
+                print(txt_to_print)
+            txt_output += txt_to_print                  
+    
+    return txt_output
+        
 def parse_sandboxes(
     path_to_terminal_data, 
+    include_sessions=None,
     mouse_names=None, 
     munged_sessions=None,
     rename_sessions_l=None,
     rename_mouse_d=None,
     protocol_name='PAFT',
     quiet=False,
+    load_sound_data=True,
     ):
     """Load the data from the specified mice, clean, and return.
     
@@ -133,9 +439,16 @@ def parse_sandboxes(
         The path to Autopilot data. Can be gotten from
         paclab.paths.get_path_to_terminal_data()
     
+    include_sessions : list of string, or None
+        At least one of `include_sessions` or `mouse_names` must not be None
+        If `include_sessions` is not None, then it must be a list, and only
+        sessions in that list will be included. Also in this case, `mouse_names`
+        is ignored (i.e., this argument takes precedence).
+    
     mouse_names : list of string, or None
-        A list of mouse names to load
-        If None, all mice are loaded.
+        At least one of `include_sessions` or `mouse_names` must not be None
+        If `include_sesions` is None and `mouse_names` is not None, then 
+        only mice in this list will be included.
     
     munged_sessions : list of string
         A list of session names to drop
@@ -219,10 +532,22 @@ def parse_sandboxes(
     txt_output = ''
     
     
-    ## Get list of available sandboxes
+    ## Decide which directories to enter
     sandbox_root_dir = os.path.join(path_to_terminal_data, 'sandboxes')
-    sandbox_dir_l = sorted(
-        map(os.path.abspath, glob.glob(os.path.join(sandbox_root_dir, '*/'))))
+    
+    # Decide which to enter
+    sandbox_df = choose_sandboxes_to_enter(
+        sandbox_root_dir, 
+        include_sessions=include_sessions, 
+        mouse_names=mouse_names, 
+        munged_sessions=munged_sessions,
+        )
+
+    # Extract all identified mouse names (for a debug message)
+    all_encountered_mouse_names = list(sandbox_df['mouse_name'].unique())
+    
+    # Extract only the sandboxes to enter
+    sandboxes_to_enter_df = sandbox_df[sandbox_df['enter_sandbox']]
 
     
     ## Iterate over sandboxes
@@ -233,48 +558,26 @@ def parse_sandboxes(
     sandbox_params_l = []
     task_params_l = []
     keys_l = []
-    skipped_for_no_hdf5 = []
+    
+    # These are things we keep track of
     skipped_for_no_trials = []
     skipped_for_no_pokes = []
     skipped_for_broken_hdf5 = []
-    all_encountered_mouse_names = []
 
     # Iterate over sandboxes
-    for sandbox_dir in sandbox_dir_l:
-        ## Parse sandbox names
-        # Get sandbox name
-        sandbox_name = os.path.split(sandbox_dir)[1]
+    for sandbox_idx in tqdm.tqdm(sandboxes_to_enter_df.index):
+        ## Form sandbox_dir and hdf5_filename
+        sandbox_dir = sandboxes_to_enter_df.loc[sandbox_idx, 'full_path']
+        sandbox_name = sandboxes_to_enter_df.loc[sandbox_idx, 'sandbox_name']
+        mouse_name = sandboxes_to_enter_df.loc[sandbox_idx, 'mouse_name']
         
-        # Get datetime and mouse_name from sandbox_name
-        sandbox_dt_string = sandbox_name[:26]
-        mouse_name = sandbox_name[27:]
-        
-        # Keep track of all mice encountered
-        if mouse_name not in all_encountered_mouse_names:
-            all_encountered_mouse_names.append(mouse_name)
-        
-        # Continue if mouse_name not needed
-        if mouse_names is not None and mouse_name not in mouse_names:
-            continue
-        
-        # Continue if munged
-        if munged_sessions is not None and sandbox_name in munged_sessions:
-            continue
-        
-        # Get HDF5 filename
-        hdf5_filename_l = glob.glob(os.path.join(sandbox_dir, '*.hdf5'))
-        
-        # Skip if no hdf5 files found (and later warn)
-        if len(hdf5_filename_l) != 1:
-            skipped_for_no_hdf5.append(sandbox_name)
-            continue
-        
-        # Extract unique hdf5 filename
-        assert len(hdf5_filename_l) == 1
-        hdf5_filename = hdf5_filename_l[0]
+        # We no longer check that this is the only hdf5 file in the directory
+        # because it seems to always be, and takes too long to check
+        hdf5_filename = os.path.join(sandbox_dir, sandbox_name + '.hdf5')
         
         
         ## Load json files
+        # TODO: deal with what happens if these files don't exist
         with open(os.path.join(sandbox_dir, 'sandbox_params.json')) as fi:
             sandbox_params = json.load(fi)
 
@@ -283,185 +586,114 @@ def parse_sandboxes(
         
         # Pop this one which is always an empty dict
         task_params.pop('graduation')
-        
-        
-        ## Add the HDF5 filename mod time to sandbox_params
-        # Mod time
-        # This is approximately the end time
-        mod_ts = my.misc.get_file_time(hdf5_filename, human=False)
-        mod_time = datetime.datetime.fromtimestamp(mod_ts)        
-        sandbox_params['hdf5_modification_time'] = mod_time
-        
-        
+
+
         ## Include only the specified task_type
-        if (
-                protocol_name is not None and 
-                task_params['task_type'] != protocol_name):
+        wrong_task = (
+            protocol_name is not None and 
+            task_params['task_type'] != protocol_name)
+
+        if wrong_task:
+            # Skip
             continue
-        
+    
         
         ## Load data from hdf5 file
+        # _read_records is the largest single time sink, approx 25% of total 
         try:
             with tables.open_file(hdf5_filename) as fi:
                 # Load trial data 
                 trial_data = pandas.DataFrame.from_records(
                     fi.root['trial_data'].read())
                 
+                # We never care about this column
+                trial_data = trial_data.drop('trial_num', axis=1)
+                
                 # Load poke data
                 poke_data = pandas.DataFrame.from_records(
                     fi.root['continuous_data']['ChunkData_Pokes'].read())
                 
                 # Load sound data, or None if doesn't exist (e.g, poketrain)
-                try:
-                    sound_data = pandas.DataFrame.from_records(
-                        fi.root['continuous_data']['ChunkData_Sounds'].read())
-                except IndexError:
-                    sound_data = None
-        except tables.exceptions.HDF5ExtError:
+                # Also skip this if not load_sound_data, to save time
+                sound_data = None
+                if load_sound_data:
+                    try:
+                        sound_data = pandas.DataFrame.from_records(
+                            fi.root['continuous_data']['ChunkData_Sounds'].read())
+                    except IndexError:
+                        pass
+                
+                # Rename column 'sound' which conflicts with index level 'sound'
+                if sound_data is not None:
+                    sound_data = sound_data.rename(
+                        columns={'sound': 'sound_type'})
+                
+
+        except (tables.exceptions.HDF5ExtError, FileNotFoundError):
             # This happens on some broken HDF5 files
+            # And if it were missing, we would skip it here
             skipped_for_broken_hdf5.append(sandbox_name)
             continue            
 
 
-        ## Sometimes trials have a blank timestamp_trial_start
-        # I think this only happens when it crashes right away
-        # Drop those trials, hopefully nothing else breaks
-        # Check if this is still happening
-        trial_data = trial_data[
-            trial_data['timestamp_trial_start'] != b''].copy()
-        
-
-        ## Drop this one that we never care about
-        trial_data = trial_data.drop('trial_num', axis=1)
-
-
         ## Skip sessions with no pokes or no trials
+        # This is the last point in this function where we might continue
+        # If we pass these, then it will be included in the result
         if len(trial_data) == 0:
             skipped_for_no_trials.append(sandbox_name)
             continue
+    
         if len(poke_data) == 0:
             skipped_for_no_pokes.append(sandbox_name)
             continue
-        
-        
-        ## Check for duplicated, missing or extraneous trials
-        # This is which trials we *should* find
-        correct_range = np.array(
-            range(trial_data['trial_in_session'].max() + 1))
-        
-        # These are trials that were found, but should not be there
-        # I don't think this is actually possible unless there are negative
-        # trial numbers
-        extraneous_trials_mask = ~np.isin(
-            trial_data['trial_in_session'].values, correct_range)
-        
-        if np.any(extraneous_trials_mask):
-            txt_to_print = ('warning: {} has extraneous trials: {}\n'.format(
-                sandbox_name,
-                trial_data['trial_in_session'].values[extraneous_trials_mask]))
-            if not quiet:
-                print(txt_to_print)
-            txt_output += txt_to_print
+    
 
-        # These are trials that were not found, but should have been
-        trials_not_found_mask = ~np.isin(
-            correct_range, trial_data['trial_in_session'].values)
-        
-        if np.any(trials_not_found_mask):
-            txt_to_print = ('warning: {} has missing trials: {}\n'.format(
-                sandbox_name,
-                correct_range[trials_not_found_mask]))            
-            if not quiet:
-                print(txt_to_print)
-            txt_output += txt_to_print            
+        ## Add the HDF5 filename mod time to sandbox_params
+        # Since we were able to open this hdf5 file, this won't fail
+        # Mod time is approximately the end time
+        mod_ts = my.misc.get_file_time(hdf5_filename, human=False)
+        mod_time = datetime.datetime.fromtimestamp(mod_ts)        
+        sandbox_params['hdf5_modification_time'] = mod_time
 
-        # These are trial numbers that occurred more than once
-        duplicate_trials_mask = trial_data['trial_in_session'].duplicated()
-        
-        if np.any(duplicate_trials_mask):
-            txt_to_print = ('warning: {} has duplicate trials: {}\n'.format(
-                sandbox_name,
-                trial_data['trial_in_session'].values[duplicate_trials_mask],
-                ))
-            if not quiet:
-                print(txt_to_print)
-            txt_output += txt_to_print            
+
+        ## Error check for corrupted trial_data
+        txt_output, trial_data = check_for_corrupted_trial_data(
+            sandbox_name=sandbox_name,
+            trial_data=trial_data,
+            txt_output=txt_output,
+            quiet=quiet,
+            )
         
         
         ## Coerce dtypes for trial_data
-        # Decode columns that are bytes
-        for decode_col in ['previously_rewarded_port', 'rewarded_port', 
-                'timestamp_reward', 'timestamp_trial_start', 'group']:
-            trial_data[decode_col] = (
-                trial_data[decode_col].str.decode('utf-8')
-                )
-
-        # Coerce timestamp to datetime
-        for timestamp_column in ['timestamp_reward', 'timestamp_trial_start']:
-            # Coerce
-            trial_data[timestamp_column] = (
-                trial_data[timestamp_column].apply(
-                lambda s: datetime.datetime.fromisoformat(s)))
-            
-            # Add timezone
-            trial_data[timestamp_column] = (
-                trial_data[timestamp_column].dt.tz_localize(tz))
-
-        # Coerce the columns that are boolean
-        bool_cols = []
-        for bool_col in bool_cols:
-            trial_data[bool_col] = trial_data[bool_col].replace(
-                {'True': True, 'False': False}).astype(bool)
-
+        # trial_data
+        trial_data = decode_and_coerce_df(
+            trial_data,
+            columns_to_decode=['previously_rewarded_port', 'rewarded_port', 
+                'timestamp_reward', 'timestamp_trial_start', 'group'],
+            columns_to_timestamp=['timestamp_reward', 'timestamp_trial_start'],
+            columns_to_bool=[],
+            tz=tz,
+            )
         
-        ## Coerce dtypes for poke_data
-        # Decode columns that are bytes
-        for decode_col in ['poked_port', 'timestamp']:
-            poke_data[decode_col] = poke_data[
-                decode_col].str.decode('utf-8')
-
-        # Coerce timestamp to datetime
-        for timestamp_column in ['timestamp']:
-            # Coerce
-            poke_data[timestamp_column] = (
-                poke_data[timestamp_column].apply(
-                lambda s: datetime.datetime.fromisoformat(s)))
-
-            # Add timezone
-            poke_data[timestamp_column] = (
-                poke_data[timestamp_column].dt.tz_localize(tz))
+        # poke_data
+        poke_data = decode_and_coerce_df(
+            poke_data,
+            columns_to_decode=['poked_port', 'timestamp'],
+            columns_to_timestamp=['timestamp'],
+            columns_to_bool=['first_poke', 'reward_delivered'],
+            tz=tz,
+            )        
         
-        # Coerce the columns that are boolean
-        bool_cols = ['first_poke', 'reward_delivered']
-        for bool_col in bool_cols:
-            try:
-                poke_data[bool_col] = poke_data[bool_col].replace(
-                    {1: True, 0: False}).astype(bool)
-            except KeyError:
-                print("warning: missing bool_col {}".format(bool_col))
-        
-
-        ## Coerce dtypes for sound_data
+        # sound_data
         if sound_data is not None:
-            # Rename the column 'sound' which conflicts with index level 'sound'
-            sound_data = sound_data.rename(
-                columns={'sound': 'sound_type'})        
-            
-            # Decode columns that are bytes
-            for decode_col in ['pilot', 'side', 'sound_type', 'locking_timestamp']:
-                sound_data[decode_col] = sound_data[
-                    decode_col].str.decode('utf-8')
-
-            # Coerce timestamp to datetime
-            for timestamp_column in ['locking_timestamp']:
-                # Coerce
-                sound_data[timestamp_column] = (
-                    sound_data[timestamp_column].apply(
-                    lambda s: datetime.datetime.fromisoformat(s)))
-                
-                # Add timezone
-                sound_data[timestamp_column] = (
-                    sound_data[timestamp_column].dt.tz_localize(tz))
+            sound_data = decode_and_coerce_df(
+                sound_data,
+                columns_to_decode=['pilot', 'side', 'sound_type', 'locking_timestamp'],
+                columns_to_timestamp=['locking_timestamp'],
+                columns_to_bool=[],
+                tz=tz,
+                )              
 
 
         ## Append
@@ -472,86 +704,22 @@ def parse_sandboxes(
         task_params_l.append(task_params)
         keys_l.append((mouse_name, sandbox_name))
 
-
-    ## Warn about skipped sessions
-    if len(skipped_for_no_hdf5) > 0:
-        txt_to_print = (
-            "warning: skipped the following sessions with no HDF5 file, "
-            "these should be added to 'munged_sessions:'\n")
-
-        for session_name in skipped_for_no_hdf5:
-            txt_to_print += ('"{}",'.format(session_name)) + '\n'
-
-        txt_to_print += '\n'
-        
-        if not quiet:
-            print(txt_to_print)
-        txt_output += txt_to_print            
-
     
-    if len(skipped_for_broken_hdf5) > 0:
-        txt_to_print = (
-            "warning: skipped the following sessions with broken HDF5, "
-            "these should be added to 'munged_sessions:'\n")
-            
-        for session_name in skipped_for_broken_hdf5:
-            txt_to_print += ('"{}",'.format(session_name)) + '\n'
-            
-        txt_to_print += '\n'
-        
-        if not quiet:
-            print(txt_to_print)
-        txt_output += txt_to_print            
-        
-    if len(skipped_for_no_trials) > 0:
-        txt_to_print = (
-            "warning: skipped the following sessions with zero trials, "
-            "these should be added to 'munged_sessions:'\n")
-            
-        for session_name in skipped_for_no_trials:
-            txt_to_print += ('"{}",'.format(session_name)) + '\n'
+    ## Warnings
+    # Warn about skipped sessions
+    txt_output = handle_sandbox_error_messages(
+        skipped_for_broken_hdf5,
+        skipped_for_no_trials,
+        skipped_for_no_pokes,
+        txt_output,
+        quiet,
+        )
 
-        txt_to_print += '\n'
-        
-        if not quiet:
-            print(txt_to_print)
-        txt_output += txt_to_print            
-    
-    if len(skipped_for_no_pokes) > 0:
-        txt_to_print = (
-            "warning: skipped the following sessions with zero pokes, "
-            "these should be added to 'munged_sessions:'\n")
-            
-        for session_name in skipped_for_no_pokes:
-            txt_to_print += ('"{}",'.format(session_name)) + '\n'
+    # Warn if no mice found
+    txt_output = warn_if_no_mouse_found(
+        mouse_names, all_encountered_mouse_names, txt_output, quiet)
 
-        txt_to_print += '\n'
-        
-        if not quiet:
-            print(txt_to_print)
-        txt_output += txt_to_print            
-
-
-    ## Warn if no mice found
-    if mouse_names is not None:
-        missing_mice = []
-        for mouse in mouse_names:
-            if mouse not in all_encountered_mouse_names:
-                missing_mice.append(mouse)
-        if len(missing_mice) > 0:
-            txt_to_print = "warning: the following mice were not found:\n"
-            txt_to_print += "\n".join(missing_mice)
-            txt_to_print += '\n'
-            txt_to_print += "did you mean one of the following?\n"
-            txt_to_print += ", ".join(sorted(all_encountered_mouse_names)) + '\n'
-            txt_to_print += '\n'
-
-            if not quiet:
-                print(txt_to_print)
-            txt_output += txt_to_print                  
-    
-
-    ## Error if no sessions found
+    # Error if no sessions found
     if len(sandbox_params_l) == 0:
         raise ValueError(
             "no sandboxes found! either the data cannot be loaded, or "
