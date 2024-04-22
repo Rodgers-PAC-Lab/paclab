@@ -383,6 +383,49 @@ def handle_sandbox_error_messages(
     
     return txt_output
 
+def assign_protocol_name(big_session_params):
+    """Assign a non-null protocol_name to all sessions
+    
+    Before 2022-10-07, we stored only protocol_name, and afterward
+    we stored only protocol_filename. 
+    
+    For sessions after 2022-10-07, this function calculates what 
+    protocol_name was (by dropping the path and extension of 
+    protocol_filename), and stores in the column 'protocol_name'.
+    
+    For sessions before that date, no change is made. 
+    
+    Returns: big_session_params, with changes made in place.
+    """
+    # Before 2022-10-07, we only stored protocol_name, and aftewards
+    # we only stored protocol_filename
+    if 'protocol_filename' in big_session_params.columns:
+        # This means we are analyzing at least one session after 2022-10-07
+        if 'protocol_name' in big_session_params.columns:
+            # This means we are analyzing a mix of data before and after 10-07
+            assert ((
+                big_session_params['protocol_filename'].isnull().astype(int) + 
+                big_session_params['protocol_name'].isnull().astype(int)
+                ) == 1).all()
+        else:
+            # This means we are only analyzing data after 2022-10-07
+            # Create this column so we can assign to it below
+            big_session_params['protocol_name'] = ''
+
+        # Generate a short protocol name, which is the filename without the
+        # full path and without the extension
+        short_protocol_name = big_session_params['protocol_filename'].dropna().apply(
+            lambda s: os.path.split(s)[1].replace('.json', ''))
+        
+        # Assign this into protocol_name, which we verified above was either
+        # null for the relevant rows, or we just created the column
+        big_session_params.loc[
+            short_protocol_name.index, 'protocol_name'] = short_protocol_name.values
+    
+    # Regardless of the above, this should not be null now, unless we are
+    # analyzing REALLY old data (?)
+    assert not big_session_params['protocol_name'].isnull().any()
+
 def warn_if_no_mouse_found(
     mouse_names,
     all_encountered_mouse_names,
@@ -417,7 +460,106 @@ def warn_if_no_mouse_found(
             txt_output += txt_to_print                  
     
     return txt_output
-        
+
+def clean_big_trial_df(big_trial_df):
+    """Cleans up big_trial_df
+    
+    * Renames timestamp_trial_start to trial_start
+    * Drops group, session, session_uuid
+    * Calculates "duration" of each trial, which will always be null
+      on the last trial of each session
+    
+    Returns: big_trial_df (not changed in place)
+    """
+    # Rename
+    big_trial_df = big_trial_df.rename(
+        columns={'timestamp_trial_start': 'trial_start'})
+
+    # Drop, these are not relevant
+    big_trial_df = big_trial_df.drop(
+        ['group', 'session', 'session_uuid'], axis=1)
+
+    # Add duration
+    # This shift avoids shifting in data from another session
+    # It relies on the index being ['mouse', 'session_name', 'trial'] here
+    next_trial_start = big_trial_df.groupby(
+        ['mouse', 'session_name'])['trial_start'].shift(-1)
+    
+    # Duration will be null on the last trial of a session, because there is
+    # no next_trial_start
+    big_trial_df['duration'] = (
+        next_trial_start - big_trial_df['trial_start']).apply(
+        lambda ts: ts.total_seconds())
+    
+    return big_trial_df
+
+def clean_big_poke_df(big_poke_df, big_trial_df):
+    """Clean big_poke_df
+    
+    * Drop pokes from before the first trial, after the last trial,
+      or any unaligned with any trial (the last is rare)
+    * Join 'trial_start', 'rewarded_port', 'previously_rewarded_port'
+      from big_trial_df onto big_poke_df
+    * Assert that none of these are null, and previously_rewarded_port is
+      null only if it's the first trial
+    * Calculate t_wrt_start
+    
+    Returns: big_poke_df
+    """
+    # Put trial on the index
+    big_poke_df = big_poke_df.set_index(
+        'trial', append=True).reorder_levels(
+        ['mouse', 'session_name', 'trial', 'poke']).sort_index()        
+    
+    # Drop all pokes from trial == -1, which I think occurred before
+    # the session truly started
+    big_poke_df = big_poke_df.drop(-1, level='trial', errors='ignore')
+    
+    # big_poke_df routinely contains pokes from the trial after the
+    # last one in big_trial_df. These are just the pokes from the 
+    # never-completed trial (I think?)
+    # Drop those pokes
+    trial_to_drop = big_trial_df.groupby(
+        ['mouse', 'session_name']).apply(
+        lambda df: df.index.get_level_values('trial')[-1]).rename(
+        'trial') + 1
+    
+    # Convert to MultiIndex
+    trial_to_drop = pandas.MultiIndex.from_frame(trial_to_drop.reset_index())
+    
+    # Drop pokes from those trials
+    big_poke_df = big_poke_df.drop(trial_to_drop, errors='ignore')
+    
+    # Join 'trial_start' onto big_poke_df
+    big_poke_df = big_poke_df.join(big_trial_df[
+        ['trial_start', 'rewarded_port', 'previously_rewarded_port']])
+    
+    # Drop pokes without a matching trial start
+    # This hapens very rarely (only on 2023-02-16)
+    bad_mask = big_poke_df['trial_start'].isnull()
+    if np.any(bad_mask):
+        print(
+            "warning: dropping {} pokes ".format(np.sum(bad_mask)) + 
+            "that don't have a matching trial")
+        big_poke_df = big_poke_df[~bad_mask].copy()
+
+    # After doing this, previously_rewarded_port should ONLY be ''
+    # on the first trial
+    assert not big_poke_df[
+        ['trial_start', 'rewarded_port', 'previously_rewarded_port']
+        ].isnull().any().any()
+    assert not (
+        big_poke_df.drop(0, level='trial')['previously_rewarded_port'] 
+        == '').any()
+
+    # Normalize poke time to trial start time
+    big_poke_df['t_wrt_start'] = (
+        big_poke_df['timestamp'] - big_poke_df['trial_start'])
+    big_poke_df['t_wrt_start'] = big_poke_df['t_wrt_start'].apply(
+        lambda ts: ts.total_seconds())
+
+    return big_poke_df
+
 def parse_sandboxes(
     path_to_terminal_data, 
     include_sessions=None,
@@ -726,7 +868,7 @@ def parse_sandboxes(
             "none of your requested mice could be found")
     
 
-    ## Concat
+    ## Concat big_trial_df, big_poke_df, big_sound_df
     big_trial_df = pandas.concat(
         trial_data_l, keys=keys_l, names=['mouse', 'session_name', 'trial'])
     big_poke_df = pandas.concat(
@@ -740,11 +882,14 @@ def parse_sandboxes(
             sound_data_l, keys=keys_l, 
             names=['mouse', 'session_name', 'sound'])
     
-    # Make DataFrame from task_params and sandbox_params
+    
+    ## Make big_session_params from task_params and sandbox_params
     big_task_params = pandas.DataFrame.from_records(task_params_l,
-        index=pandas.MultiIndex.from_tuples(keys_l, names=['mouse', 'session_name']))
+        index=pandas.MultiIndex.from_tuples(
+        keys_l, names=['mouse', 'session_name']))
     big_sandbox_params = pandas.DataFrame.from_records(sandbox_params_l,
-        index=pandas.MultiIndex.from_tuples(keys_l, names=['mouse', 'session_name']))
+        index=pandas.MultiIndex.from_tuples(
+        keys_l, names=['mouse', 'session_name']))
 
     # Set timezone
     big_sandbox_params['hdf5_modification_time'] = (
@@ -754,21 +899,28 @@ def parse_sandboxes(
     big_session_params = pandas.concat(
         [big_task_params, big_sandbox_params], axis=1, verify_integrity=True)
 
-
-    ## Parse big_session_params
-    # add 'date' to big_session_params
+    
+    ## Sort everything that we need going forward
+    big_trial_df = big_trial_df.sort_index()
+    big_poke_df = big_poke_df.sort_index()
+    big_session_params = big_session_params.sort_index()
+    if big_sound_df is not None:
+        big_sound_df = big_sound_df.sort_index()
+    
+    
+    ## Add columns to big_session_params
+    # Specifically: date, approx_duration_hdf5, trial counts and times,
+    # and protocol_name
+    # The following columns may be null, if they were missing from JSON
+    #   protocol_filename, sandbox_creation_time, camera_name
     big_session_params['date'] = [datetime.date.fromisoformat(s[:10]) 
         for s in big_session_params.index.get_level_values('session_name').values]
     
     # Add trial quantifications to big_session_params
-    big_session_params['n_trials'] = big_trial_df.groupby(
-        ['mouse', 'session_name']).size()
-    big_session_params['first_trial'] = big_trial_df.groupby(
-        ['mouse', 'session_name'])[
-        'timestamp_trial_start'].min()
-    big_session_params['last_trial'] = big_trial_df.groupby(
-        ['mouse', 'session_name'])[
-        'timestamp_trial_start'].max()
+    gobj = big_trial_df.groupby(['mouse', 'session_name'])
+    big_session_params['n_trials'] = gobj.size()
+    big_session_params['first_trial'] = gobj['timestamp_trial_start'].min()
+    big_session_params['last_trial'] = gobj['timestamp_trial_start'].max()
     big_session_params['approx_duration'] = (
         big_session_params['last_trial'] - big_session_params['first_trial'])
     
@@ -777,96 +929,32 @@ def parse_sandboxes(
         big_session_params['hdf5_modification_time'] - 
         big_session_params['first_trial'])
     
+    # Set protocol_name from protocol_filename
+    assign_protocol_name(big_session_params)
     
-    ## Set protocol_name from protocol_filename where needed
-    # Before 2022-10-07, we only stored protocol_name, and aftewards
-    # we only stored protocol_filename
-    if 'protocol_filename' in big_session_params.columns:
-        # This means we are analyzing at least one session after 2022-10-07
-        if 'protocol_name' in big_session_params.columns:
-            # This means we are analyzing a mix of data before and after 10-07
-            assert ((
-                big_session_params['protocol_filename'].isnull().astype(int) + 
-                big_session_params['protocol_name'].isnull().astype(int)
-                ) == 1).all()
-        else:
-            # This means we are only analyzing data after 2022-10-07
-            # Create this column so we can assign to it below
-            big_session_params['protocol_name'] = ''
 
-        # Generate a short protocol name, which is the filename without the
-        # full path and without the extension
-        short_protocol_name = big_session_params['protocol_filename'].dropna().apply(
-            lambda s: os.path.split(s)[1].replace('.json', ''))
-        
-        # Assign this into protocol_name, which we verified above was either
-        # null for the relevant rows, or we just created the column
-        big_session_params.loc[
-            short_protocol_name.index, 'protocol_name'] = short_protocol_name.values
+    ## Clean up the dataframes by adding columns, etc
+    big_trial_df = clean_big_trial_df(big_trial_df)
+    big_poke_df = clean_big_poke_df(big_poke_df, big_trial_df)
+
+
+    ## Count pokes per trial and check there was at least 1 on every trial
+    # Count pokes
+    n_pokes = big_poke_df.groupby(
+        ['mouse', 'session_name', 'trial']).size().rename('n_pokes')
     
-    # Regardless of the above, this should not be null now, unless we are
-    # analyzing REALLY old data (?)
-    assert not big_session_params['protocol_name'].isnull().any()
-
-
-    ## Parse trial data further
-    # Rename
-    big_trial_df = big_trial_df.rename(
-        columns={'timestamp_trial_start': 'trial_start'})
-
-    # Drop, not sure what this is supposed to be
-    big_trial_df = big_trial_df.drop('group', axis=1)
-
-    # Drop, these are not relevant
-    big_trial_df = big_trial_df.drop(['session', 'session_uuid'], axis=1)
-
-    # Add duration
-    # This shift avoids shifting in data from another session
-    # It relies on the index being ['mouse', 'session_name', 'trial'] here
-    next_trial_start = big_trial_df.groupby(
-        ['mouse', 'session_name'])['trial_start'].shift(-1)
+    # Join on big_trial_df
+    big_trial_df = big_trial_df.join(n_pokes)
+    big_trial_df['n_pokes'] = big_trial_df['n_pokes'].fillna(0).astype(int)
     
-    # Duration will be null on the last trial of a session, because there is
-    # no next_trial_start
-    big_trial_df['duration'] = (
-        next_trial_start - big_trial_df['trial_start']).apply(
-        lambda ts: ts.total_seconds())
+    # Very rarely there is a trial with no pokes
+    # Mostly these are on 2023-02-16
+    # But in two cases it happened on the last trial of the session --
+    # Presumably there just wasn't time for a poke
+    big_trial_df['unpoked'] = False
+    big_trial_df.loc[big_trial_df['n_pokes'] == 0, 'unpoked'] = True
 
-
-    ## Add columns to big_trial_df, and calculate t_wrt_start for pokes
-    # Join 'trial_start' onto big_poke_df
-    big_poke_df = big_poke_df.join(
-        big_trial_df['trial_start'], on=['mouse', 'session_name', 'trial'])
-
-    # Drop pokes without a matching trial start
-    # TODO: Look into why this is happening -- is it only before first trial 
-    # and on last trial or what?
-    big_poke_df = big_poke_df[~big_poke_df['trial_start'].isnull()].copy()
-
-    # Normalize poke time to trial start time
-    big_poke_df['t_wrt_start'] = (
-        big_poke_df['timestamp'] - big_poke_df['trial_start'])
-    big_poke_df['t_wrt_start'] = big_poke_df['t_wrt_start'].apply(
-        lambda ts: ts.total_seconds())
-
-
-    ## Join rewarded_port and previously_rewarded_port on pokes
-    big_poke_df = big_poke_df.join(
-        big_trial_df[['rewarded_port', 'previously_rewarded_port']],
-        on=['mouse', 'session_name', 'trial'],
-        rsuffix='_correct')
-
-    # Actually don't do this because then it looks like no pokes on this trial
-    #~ # Drop big_poke_df rows where previously_rewarded_port is ''
-    #~ # TODO: Check that this is only the first trial in a session
-    #~ # TODO: first trial should be 0 not 1
-    #~ big_poke_df = big_poke_df[big_poke_df['previously_rewarded_port'] != ''].copy()
-
-    # Add trial to the index
-    big_poke_df = big_poke_df.set_index('trial', append=True).reorder_levels(
-        ['mouse', 'session_name', 'trial', 'poke']).sort_index()
-
-
+    1/0
     ## Label the type of each poke
     # target port is 'correct'
     # prev_target port is 'prev' (presumably consumptive)
@@ -879,30 +967,30 @@ def parse_sandboxes(
         big_poke_df['poked_port'] == big_poke_df['previously_rewarded_port'],
         'poke_type'] = 'prev'
 
-
-    ## Count pokes per trial and check there was at least 1 on every trial
-    n_pokes = big_poke_df.groupby(
-        ['mouse', 'session_name', 'trial']).size().rename('n_pokes')
-    big_trial_df = big_trial_df.join(n_pokes)
-    #~ assert not big_trial_df['n_pokes'].isnull().any()
-
-    # TODO figure out why this is sometimes null
-    big_trial_df = big_trial_df[~big_trial_df['n_pokes'].isnull()].copy()
-    big_trial_df['n_pokes'] = big_trial_df['n_pokes'].astype(int)
-
-    # It should never be zero, it would have been null if so
-    assert (big_trial_df['n_pokes'] > 0).all()
-
-
-    ## Debug there is always a correct poke
+    
+    ## Identify trials lacking a correct poke
     n_poke_types_by_trial = big_poke_df.groupby(
         ['mouse', 'session_name', 'trial'])['poke_type'].value_counts().unstack(
-        'poke_type').fillna(0).astype(int)
-    assert len(big_trial_df) == len(n_poke_types_by_trial)
+        'poke_type')
+    
+    # Reindex by big_trial_df (to include the trials with no pokes)
+    n_poke_types_by_trial = n_poke_types_by_trial.reindex(
+        big_trial_df.index).fillna(0).astype(int)
+    
+    # Label trials lacking correct poke
+    bad_trials = n_poke_types_by_trial.index[
+        n_poke_types_by_trial['correct'] == 0]
+    big_trial_df['no_correct_pokes'] = False
+    big_trial_df.loc[bad_trials, 'no_correct_pokes'] = True
 
-    # TODO: this is not working, figure out why
-    #assert (n_poke_types_by_trial['correct'] > 0).all()
 
+    ## 
+    
+
+    ## Recalculate the first_poke
+    # We can't count on this having been done properly on the rpi
+    # It's not even guaranteed to have been unique
+    
 
     ## Check whether first_poke was correctly identified
     n_first_pokes_per_trial = big_poke_df.groupby(
