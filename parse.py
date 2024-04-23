@@ -560,6 +560,48 @@ def clean_big_poke_df(big_poke_df, big_trial_df):
 
     return big_poke_df
 
+def reorder_pokes_by_timestamp(big_poke_df):
+    """Reorder pokes by timestamp
+    
+    Original poke index is stored as poke_orig_idx.
+    The new 'poke' level on the index is now sorted correctly.
+    
+    Returns: big_poke_df
+    """
+    # Copy
+    big_poke_df = big_poke_df.copy()
+    
+    # First pop out the 'poke' index as 'poke_orig'. It has missing indices
+    #   because of the dropping above and no longer functions as an index.
+    big_poke_df['poke_orig_idx'] = big_poke_df.index.get_level_values('poke')
+
+    # Then argsort poke_orig to get poke_orig_order
+    big_poke_df['poke_orig_order'] = big_poke_df.groupby(
+        ['mouse', 'session_name'])['poke_orig_idx'].apply(
+        lambda ser: ser.droplevel(['mouse', 'session_name']).argsort())
+    
+    # Then argsort timestamp to get true_poke_order
+    # If they arrived out of order, that's probably just networking
+    # This happens 0.002 of pokes, on 20% of sessions, especially when 
+    # a port is being artefactually activated really quickly
+    big_poke_df['true_poke_order'] = big_poke_df.groupby(
+        ['mouse', 'session_name'])['timestamp'].apply(
+        lambda ser: ser.droplevel(['mouse', 'session_name']).argsort()
+        )
+
+    # Replace 'poke' with 'true_poke_order' on index
+    big_poke_df = big_poke_df.set_index(
+        'true_poke_order', append=True).reset_index(
+        'poke', drop=True).sort_index()
+    
+    # Drop 'poke_orig_order'
+    big_poke_df = big_poke_df.drop('poke_orig_order', axis=1)
+    
+    # Rename index
+    big_poke_df.index.names = ['mouse', 'session_name', 'trial', 'poke']
+
+    return big_poke_df
+    
 def parse_sandboxes(
     path_to_terminal_data, 
     include_sessions=None,
@@ -954,7 +996,11 @@ def parse_sandboxes(
     big_trial_df['unpoked'] = False
     big_trial_df.loc[big_trial_df['n_pokes'] == 0, 'unpoked'] = True
 
-    1/0
+    
+    ## Sort pokes by 'timestamp'
+    big_poke_df = reorder_pokes_by_timestamp(big_poke_df)
+
+    
     ## Label the type of each poke
     # target port is 'correct'
     # prev_target port is 'prev' (presumably consumptive)
@@ -967,8 +1013,70 @@ def parse_sandboxes(
         big_poke_df['poked_port'] == big_poke_df['previously_rewarded_port'],
         'poke_type'] = 'prev'
 
+
+    ## Identify the choice_poke
+    # This is the mouse's "choice"
+    first_non_prev_poke = big_poke_df[
+        big_poke_df['poke_type'] != 'prev'].reset_index('poke').groupby(
+        ['mouse', 'session_name', 'trial']).first()['poke']
+    
+    # Mark this as the choice_poke
+    big_poke_df['choice_poke'] = False
+    big_poke_df.loc[
+        pandas.MultiIndex.from_frame(first_non_prev_poke.reset_index()),
+        'choice_poke'] = True
+    
+    
+    ## Categorize 'prev' pokes into consummatory or not
+    # Join the poke index of the choice poke
+    # This will be null on trials with no choice poke
+    # (i.e., no pokes, or all prev pokes)
+    big_poke_df = big_poke_df.join(
+        first_non_prev_poke.rename('choice_poke_idx'))    
+    
+    # Mark all pokes after the choice poke
+    # This will be false on trials with no choice poke
+    big_poke_df['after_choice_poke'] = False
+    after_choice_mask = (
+        big_poke_df.index.get_level_values('poke') > 
+        big_poke_df['choice_poke_idx'])
+    big_poke_df.loc[after_choice_mask, 'after_choice_poke'] = True
+    
+    # Subcategorize 'prev' pokes into 'prev_consume' and 'prev_return'
+    # For backwards compatibility, use another column for this instead of
+    # another 'poke type'
+    big_poke_df['consummatory'] = False
+    prev_consume_mask = (
+        (big_poke_df['poke_type'] == 'prev') &
+        ~big_poke_df['after_choice_poke'])
+    big_poke_df.loc[prev_consume_mask, 'consummatory'] = True
+
+    # Drop 'choice_poke_idx' and 'after_choice_poke'
+    big_poke_df = big_poke_df.drop(
+        ['choice_poke_idx', 'after_choice_poke'], axis=1)
+
+    # Error check
+    # All pokes from trials lacking a choice poke should be consummatory
+    # Such trials are extremely rare
+    trials_with_choice_poke_mask = big_poke_df.groupby(
+        ['mouse', 'session_name', 'trial'])['choice_poke'].any()
+    trials_with_no_choice_poke_midx = trials_with_choice_poke.index[
+        ~trials_with_choice_poke.values]
+    pokes_on_such_trials = my.misc.slice_df_by_some_levels(
+        big_poke_df, trials_with_no_choice_poke_midx)
+    assert pokes_on_such_trials['consummatory'].all()
+    assert (pokes_on_such_trials['poke_type'] == 'prev').all()
+    
+    # Label these trials
+    # Include also unpoked trials (which won't show up above because there
+    # were no pokes to find)
+    big_trial_df['no_choice_made'] = big_trial_df['unpoked'].copy()
+    big_trial_df.loc[trials_with_no_choice_poke_midx, 'no_choice_made'] = True
+
     
     ## Identify trials lacking a correct poke
+    # These are somewhat common, unfortunately, and concentrated into
+    # 5-10 sessions, which should likely be dropped
     n_poke_types_by_trial = big_poke_df.groupby(
         ['mouse', 'session_name', 'trial'])['poke_type'].value_counts().unstack(
         'poke_type')
@@ -984,7 +1092,7 @@ def parse_sandboxes(
     big_trial_df.loc[bad_trials, 'no_correct_pokes'] = True
 
 
-    ## 
+    1/0
     
 
     ## Recalculate the first_poke
