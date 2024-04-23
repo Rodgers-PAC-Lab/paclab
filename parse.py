@@ -76,15 +76,12 @@ def load_data(
     munged_sessions_df = pandas.read_excel(os.path.expanduser(
         '~/mnt/cuttlefish/shared/munged_sessions.xlsx'))
     munged_sessions = munged_sessions_df['Session Name'].values
-    rename_sessions_l = [
-        ]
 
     # Get parsed_results
     parsed_results = paclab.parse.parse_sandboxes(
         path_to_terminal_data, 
         include_sessions=include_sessions,
         mouse_names=mouse_names,
-        rename_sessions_l=rename_sessions_l,
         munged_sessions=munged_sessions,
         protocol_name=protocol_name,
         quiet=quiet,
@@ -383,6 +380,37 @@ def handle_sandbox_error_messages(
     
     return txt_output
 
+def process_big_session_params(big_session_params, big_trial_df):
+    """Add columns and clean big_session_params
+    
+    * Adds 'date' columns from 'session_name'
+    * Adds 'n_trials', 'first_trial', 'last_trial', 'approx_duration',
+      'approx_duration_hdf5'
+    * Sets 'protocol_name' with assign_protocol_name
+    """
+    # Specifically: date, approx_duration_hdf5, trial counts and times,
+    # and protocol_name
+    # The following columns may be null, if they were missing from JSON
+    #   protocol_filename, sandbox_creation_time, camera_name
+    big_session_params['date'] = [datetime.date.fromisoformat(s[:10]) 
+        for s in big_session_params.index.get_level_values('session_name').values]
+    
+    # Add trial quantifications to big_session_params
+    gobj = big_trial_df.groupby(['mouse', 'session_name'])
+    big_session_params['n_trials'] = gobj.size()
+    big_session_params['first_trial'] = gobj['timestamp_trial_start'].min()
+    big_session_params['last_trial'] = gobj['timestamp_trial_start'].max()
+    big_session_params['approx_duration'] = (
+        big_session_params['last_trial'] - big_session_params['first_trial'])
+    
+    # Alternate estimate of session duration
+    big_session_params['approx_duration_hdf5'] = (
+        big_session_params['hdf5_modification_time'] - 
+        big_session_params['first_trial'])
+    
+    # Set protocol_name from protocol_filename
+    assign_protocol_name(big_session_params)
+    
 def assign_protocol_name(big_session_params):
     """Assign a non-null protocol_name to all sessions
     
@@ -601,23 +629,349 @@ def reorder_pokes_by_timestamp(big_poke_df):
     big_poke_df.index.names = ['mouse', 'session_name', 'trial', 'poke']
 
     return big_poke_df
+
+def label_poke_types(big_poke_df, big_trial_df):
+    """Label the type of each poke
     
+    * Count pokes per trial, save as big_trial_df['n_pokes'], mark
+      'unpoked' trials in big_trial_df
+    * Set 'poke_type'
+    * Set 'choice_poke' (and drop 'first_poke')
+    * Set 'consummatory'
+    * Error check that all pokes from trials with no choice_poke
+      are consummatory
+    * Add no_choice_made column to big_trial_df
+    * Add no_correct_pokes column to big_trial_df
+    
+    Returns: big_poke_df, big_trial_df
+    """
+    ## Copy to avoid weird view
+    big_poke_df = big_poke_df.copy()
+    big_trial_df = big_trial_df.copy()
+
+
+    ## Count pokes per trial and check there was at least 1 on every trial
+    # Count pokes
+    n_pokes = big_poke_df.groupby(
+        ['mouse', 'session_name', 'trial']).size().rename('n_pokes')
+    
+    # Join on big_trial_df
+    big_trial_df = big_trial_df.join(n_pokes)
+    big_trial_df['n_pokes'] = big_trial_df['n_pokes'].fillna(0).astype(int)
+    
+    # Very rarely there is a trial with no pokes
+    # Mostly these are on 2023-02-16
+    # But in two cases it happened on the last trial of the session --
+    # Presumably there just wasn't time for a poke
+    big_trial_df['unpoked'] = False
+    big_trial_df.loc[big_trial_df['n_pokes'] == 0, 'unpoked'] = True
+    
+    
+    ## Label the type of each poke
+    # target port is 'correct'
+    # prev_target port is 'prev' (presumably consumptive)
+    # all others (currently only one other type) is 'error'
+    big_poke_df['poke_type'] = 'error'
+    big_poke_df.loc[
+        big_poke_df['poked_port'] == big_poke_df['rewarded_port'],
+        'poke_type'] = 'correct'
+    big_poke_df.loc[
+        big_poke_df['poked_port'] == big_poke_df['previously_rewarded_port'],
+        'poke_type'] = 'prev'
+
+
+    ## Identify the choice_poke
+    # This is the mouse's "choice"
+    first_non_prev_poke = big_poke_df[
+        big_poke_df['poke_type'] != 'prev'].reset_index('poke').groupby(
+        ['mouse', 'session_name', 'trial']).first()['poke']
+    
+    # Mark this as the choice_poke
+    big_poke_df['choice_poke'] = False
+    big_poke_df.loc[
+        pandas.MultiIndex.from_frame(first_non_prev_poke.reset_index()),
+        'choice_poke'] = True
+    
+    # Drop 'first_poke', which is calculated on the rpi
+    # It turns out this can be wrong in several ways, such as being a 'prev'
+    # poke, or for multiple pokes on a trial
+    big_poke_df = big_poke_df.drop('first_poke', axis=1)
+    
+    
+    ## Categorize 'prev' pokes into consummatory or not
+    # Join the poke index of the choice poke
+    # This will be null on trials with no choice poke
+    # (i.e., no pokes, or all prev pokes)
+    big_poke_df = big_poke_df.join(
+        first_non_prev_poke.rename('choice_poke_idx'))    
+    
+    # Mark all pokes after the choice poke
+    # This will be false on trials with no choice poke
+    big_poke_df['after_choice_poke'] = False
+    after_choice_mask = (
+        big_poke_df.index.get_level_values('poke') > 
+        big_poke_df['choice_poke_idx'])
+    big_poke_df.loc[after_choice_mask, 'after_choice_poke'] = True
+    
+    # Subcategorize 'prev' pokes into 'prev_consume' and 'prev_return'
+    # For backwards compatibility, use another column for this instead of
+    # another 'poke type'
+    big_poke_df['consummatory'] = False
+    prev_consume_mask = (
+        (big_poke_df['poke_type'] == 'prev') &
+        ~big_poke_df['after_choice_poke'])
+    big_poke_df.loc[prev_consume_mask, 'consummatory'] = True
+
+    # Drop 'choice_poke_idx' and 'after_choice_poke'
+    big_poke_df = big_poke_df.drop(
+        ['choice_poke_idx', 'after_choice_poke'], axis=1)
+
+    # Error check
+    # All pokes from trials lacking a choice poke should be consummatory
+    # Such trials are extremely rare
+    trials_with_choice_poke_mask = big_poke_df.groupby(
+        ['mouse', 'session_name', 'trial'])['choice_poke'].any()
+    trials_with_no_choice_poke_midx = trials_with_choice_poke_mask.index[
+        ~trials_with_choice_poke_mask.values]
+    pokes_on_such_trials = my.misc.slice_df_by_some_levels(
+        big_poke_df, trials_with_no_choice_poke_midx)
+    assert pokes_on_such_trials['consummatory'].all()
+    assert (pokes_on_such_trials['poke_type'] == 'prev').all()
+
+    # Label trials with no choice made (which in
+    # Include also unpoked trials (which won't show up above because there
+    # were no pokes to find)
+    big_trial_df['no_choice_made'] = big_trial_df['unpoked'].copy()
+    big_trial_df.loc[trials_with_no_choice_poke_midx, 'no_choice_made'] = True
+
+
+    ## Identify trials lacking a correct poke
+    # These are somewhat common, unfortunately, and concentrated into
+    # 5-10 sessions, which should likely be dropped
+    n_poke_types_by_trial = big_poke_df.groupby(
+        ['mouse', 'session_name', 'trial'])['poke_type'].value_counts().unstack(
+        'poke_type')
+    
+    # Reindex by big_trial_df (to include the trials with no pokes)
+    n_poke_types_by_trial = n_poke_types_by_trial.reindex(
+        big_trial_df.index).fillna(0).astype(int)
+    
+    # Label trials lacking correct poke
+    bad_trials = n_poke_types_by_trial.index[
+        n_poke_types_by_trial['correct'] == 0]
+    big_trial_df['no_correct_pokes'] = False
+    big_trial_df.loc[bad_trials, 'no_correct_pokes'] = True
+    
+    return big_poke_df, big_trial_df
+
+def label_trial_outcome(big_poke_df, big_trial_df):
+    """Label outcome of each trial
+    
+    * Set big_trial_df['outcome']
+    * Set big_poke_df['poke_rank']
+    * Set big_trial_df['rcp'] and big_trial_df['first_port_poked']
+    
+    """
+    ## Copy to avoid view
+    big_poke_df = big_poke_df.copy()
+    big_trial_df = big_trial_df.copy()
+    
+    
+    ## Set outcome
+    # Outcome is determined by choice_poke, which cannot be prev by definition
+    trial_outcome = big_poke_df.loc[big_poke_df['choice_poke'], 'poke_type']
+    
+    # Join this on big_trial_df
+    # Where it is null, there was no choice
+    big_trial_df = big_trial_df.join(
+        trial_outcome.rename('outcome').droplevel('poke'))
+    big_trial_df['outcome'] = big_trial_df['outcome'].fillna('spoiled')
+    
+
+    ## Calculate the rank of each poke, excluding ALL prp
+    # Drop this, which was calculated by rpi and often wrong
+    big_poke_df = big_poke_df.drop('poke_rank', axis=1)
+    
+    # Get the latency to each port on each trial, excluding the PRP
+    this_poke_df = big_poke_df[big_poke_df['poke_type'] != 'prev']
+    latency_by_port = this_poke_df.reset_index().groupby(
+        ['mouse', 'session_name', 'trial', 'poked_port'])['t_wrt_start'].min()
+
+    # Unstack the port onto columns
+    lbpd_unstacked = latency_by_port.unstack('poked_port')
+
+    # Rank them in order of poking
+    # Subtract 1 because it starts with 1
+    # The best is 0 (correct trial) and the worst is 6 (because consumption port
+    # is ignored). The expectation under random choices is 3
+    lbpd_ranked = lbpd_unstacked.rank(
+        method='first', axis=1).stack().astype(int) - 1
+
+    # Exception: RCP can be 7 on the first trial of the session, because no PRP
+    assert lbpd_ranked.drop(0, level='trial').max() <= 6
+
+    # Join this rank onto big_poke_df
+    big_poke_df = big_poke_df.join(lbpd_ranked.rename('poke_rank'), 
+        on=['mouse', 'session_name', 'trial', 'poked_port'])
+
+    # Insert poke_rank of -1 wherever poke_type is prev
+    assert (
+        big_poke_df.loc[big_poke_df['poke_rank'].isnull(), 'poke_type'] 
+        == 'prev').all()
+    big_poke_df.loc[big_poke_df['poke_type'] == 'prev', 'poke_rank'] = -1
+    big_poke_df['poke_rank'] = big_poke_df['poke_rank'].astype(int)
+
+    # Calculate rank of correct poke
+    correct_port = big_trial_df['rewarded_port'].dropna().reset_index()
+    cp_idx = pandas.MultiIndex.from_frame(correct_port)
+    rank_of_correct_port = lbpd_ranked.reindex(
+        cp_idx).droplevel('rewarded_port').rename('rcp')
+
+    # Append this to big_trial_df
+    big_trial_df = big_trial_df.join(rank_of_correct_port)
+    
+    # Error check: rcp is null iff no_correct_pokes
+    assert big_trial_df.loc[
+        big_trial_df['rcp'].isnull()]['no_correct_pokes'].all()
+    assert big_trial_df.loc[
+        big_trial_df['no_correct_pokes'], 'rcp'].isnull().all()
+
+    # Add the first port poked
+    choice_pokes = big_poke_df[big_poke_df['choice_poke']]
+    big_trial_df['first_port_poked'] = (
+        choice_pokes['poked_port'].droplevel('poke'))
+
+    # Error check: first_port_poked is null iff no_choice_made
+    assert big_trial_df.loc[
+        big_trial_df['first_port_poked'].isnull()]['no_choice_made'].all()
+    assert big_trial_df.loc[
+        big_trial_df['no_choice_made'], 'first_port_poked'].isnull().all()    
+
+    return big_poke_df, big_trial_df
+
+def calculate_distance_between_choice_ports(big_trial_df, big_poke_df):
+    """Calculate distance between choice, reward, and PRP ports
+    
+    Adds first_port_poked_dir, previously_rewarded_port_dir, and
+    poked_port_dir to big_trial_df
+    
+    Adds fpp_wrt_rp, fpp_wrt_prp, etc to big_trial_df
+    """
+    ## Copy to avoid view
+    big_trial_df = big_trial_df.copy()
+    big_poke_df = big_trial_df.copy()
+    
+    
+    ## Convert port name to port dir
+    big_trial_df = convert_port_name_to_port_dir(big_trial_df)
+    big_poke_df = convert_port_name_to_port_dir(big_poke_df)
+
+    
+    ## Calculate errdist
+    # Define fixing function
+    def fix(arr):
+        """Fix angular variable to [-180, 180)"""
+        return np.mod(arr + 180, 360) - 180
+    
+    # Apply fix to each
+    big_trial_df['fpp_wrt_rp'] = fix(
+        big_trial_df['first_port_poked_dir'] - 
+        big_trial_df['rewarded_port_dir'])
+    big_trial_df['fpp_wrt_prp'] = fix(
+        big_trial_df['first_port_poked_dir'] - 
+        big_trial_df['previously_rewarded_port_dir'])
+    big_trial_df['rp_wrt_prp'] = fix(
+        big_trial_df['rewarded_port_dir'] - 
+        big_trial_df['previously_rewarded_port_dir'])
+    big_poke_df['pp_wrt_rp'] = fix(
+        big_poke_df['poked_port_dir'] - 
+        big_poke_df['rewarded_port_dir'])
+    big_poke_df['pp_wrt_prp'] = fix(
+        big_poke_df['poked_port_dir'] - 
+        big_poke_df['previously_rewarded_port_dir'])
+
+    return big_trial_df, big_poke_df
+
+def calculate_perf_metrics(big_trial_df):
+    """Calculate perf_metrics from big_trial_df"""
+    # Score sessions by fraction correct
+    scored_by_fraction_correct = big_trial_df.groupby(
+        ['mouse', 'session_name'])[
+        'outcome'].value_counts().unstack('outcome').fillna(0)
+    scored_by_fraction_correct['perf'] = (
+        scored_by_fraction_correct['correct'].divide(
+        scored_by_fraction_correct.sum(axis=1)))
+
+    # Score sessions by n_trials
+    scored_by_n_trials = big_trial_df.groupby(
+        ['mouse', 'session_name']).size()
+
+    # Score by n_ports
+    scored_by_n_ports = big_trial_df.groupby(
+        ['mouse', 'session_name'])['rcp'].mean()
+
+    # Extract key performance metrics
+    perf_metrics = pandas.concat([
+        scored_by_n_ports.rename('rcp'),
+        scored_by_fraction_correct['perf'].rename('fc'),
+        scored_by_n_trials.rename('n_trials'),
+        ], axis=1, verify_integrity=True)
+
+    return perf_metrics
+
+## Coerce dtypes for trial_data
+def decode_and_coerce_all_df(trial_data, poke_data, sound_data, tz):
+    """Decodes and coerces these dataframes
+    
+    Doesn't drop any data.
+    
+    Returns: trial_data, poke_data, sound_data
+    """
+    # trial_data
+    trial_data = decode_and_coerce_df(
+        trial_data,
+        columns_to_decode=['previously_rewarded_port', 'rewarded_port', 
+            'timestamp_reward', 'timestamp_trial_start', 'group'],
+        columns_to_timestamp=['timestamp_reward', 'timestamp_trial_start'],
+        columns_to_bool=[],
+        tz=tz,
+        )
+    
+    # poke_data
+    poke_data = decode_and_coerce_df(
+        poke_data,
+        columns_to_decode=['poked_port', 'timestamp'],
+        columns_to_timestamp=['timestamp'],
+        columns_to_bool=['first_poke', 'reward_delivered'],
+        tz=tz,
+        )        
+    
+    # sound_data
+    if sound_data is not None:
+        sound_data = decode_and_coerce_df(
+            sound_data,
+            columns_to_decode=[
+                'pilot', 'side', 'sound_type', 'locking_timestamp'],
+            columns_to_timestamp=['locking_timestamp'],
+            columns_to_bool=[],
+            tz=tz,
+            )     
+    
+    return trial_data, poke_data, sound_data
+
 def parse_sandboxes(
     path_to_terminal_data, 
     include_sessions=None,
     mouse_names=None, 
     munged_sessions=None,
-    rename_sessions_l=None,
-    rename_mouse_d=None,
     protocol_name='PAFT',
     quiet=False,
     load_sound_data=True,
     ):
     """Load the data from the specified mice, clean, and return.
     
-    This is a replacement of parse_hdf_files now that data is stored
-    for each session in its own "sandbox" instead of in a global mouse HDF5
-    file.
+    This is a replacement of parse_hdf_files now that data is stored for
+    each session in its own "sandbox" instead of in a global mouse HDF5 file.
     
     path_to_terminal_data : string
         The path to Autopilot data. Can be gotten from
@@ -637,23 +991,6 @@ def parse_sandboxes(
     munged_sessions : list of string
         A list of session names to drop
     
-    rename_sessions_l : list, or None
-        If None, no renaming is done.
-        Otherwise, each item in the list is a tuple of length 3
-        Each tuple consists of (
-            the session_name the file was saved as,
-            the session_name it should have been saved as,
-            the name of the actual mouse that was tested)
-        Example:
-            ('20220309115351-M2_PAFT-Box2', 
-            '20220309115351-F2_PAFT-Box2', 
-            'F2_PAFT',)        
-    
-    rename_mouse_d : dict or None
-        If None, no renaming is done
-        Otherwise, for each (key, value) pair, rename the mouse named
-        "key" to "value".     
-
     protocol_name : string or None
         Every session stores the name of the protocol (or task) in 
         task_params.json keyed by task_type. If `protocol_name` is specified
@@ -661,8 +998,6 @@ def parse_sandboxes(
         `protocol_name` will be included. 
         If `protocol_name` is None, all sessions are included.
     
-    # TODO: Figure out why some PokeTrain sessions have >100K pokes
-
     This function:
     * Loads data from sandboxes specified by mouse_names
     * Adds useful columns like t_wrt_start, rewarded_port, etc to pokes
@@ -670,6 +1005,8 @@ def parse_sandboxes(
     * Label the outcome of the trial as the type of the first poke in that trial
     * Score sessions by fraction correct, rank of correct port
     * Calculated performance metrics over all sessions
+    
+    TODO: Figure out why some PokeTrain sessions have >100K pokes
     
     Returns: dict, with the following items
         'perf_metrics': DataFrame
@@ -685,9 +1022,7 @@ def parse_sandboxes(
                 task_type, pilot, protocol_name, task_class_name, camera_name,
                 sandbox_creation_time, and all of the task parameters from
                 the protocol file
-            TODO: 
-                add "box"
-                split task_parameters into a different variable
+            TODO: add "box", split task_parameters into a different variable
         
         'trial_data': DataFrame
             Metadata about each trial
@@ -695,8 +1030,7 @@ def parse_sandboxes(
             Columns: previously_rewarded_port, rewarded_port, timestamp_reward,
                 trial_start, duration, n_pokes, correct, error, prev, 
                 outcome, rcp, and all trial parameters
-            TODO:
-                split trial_parameters into a different variable
+            TODO: split trial_parameters into a different variable
         
         'poke_data': DataFrame
             Metadata about each poke
@@ -705,14 +1039,18 @@ def parse_sandboxes(
                 rewarded_port, previously_rewarded_port, poke_type,
                 poke_rank, reward_delivered
             
-            TODO:
-                add "trial" as a level on the index
+            TODO: add "trial" as a level on the index
+        
+        'sound_data': DataFrame
+            Metadata about each sound
+            Index:
+            Columns:
     """
-    ## This is used for all timestamps
+    ## Initial setup
+    # This is used for all timestamps
     tz = pytz.timezone('America/New_York')
     
-    
-    ## Store text output here for logging
+    # Store text output here for logging
     txt_output = ''
     
     
@@ -840,7 +1178,10 @@ def parse_sandboxes(
         sandbox_params['hdf5_modification_time'] = mod_time
 
 
-        ## Error check for corrupted trial_data
+        ## Further process dataframes
+        # Error check for corrupted trial_data
+        # This will drop trials with a blank start time, and warn about
+        # other types of errors like missing trials
         txt_output, trial_data = check_for_corrupted_trial_data(
             sandbox_name=sandbox_name,
             trial_data=trial_data,
@@ -848,36 +1189,9 @@ def parse_sandboxes(
             quiet=quiet,
             )
         
-        
-        ## Coerce dtypes for trial_data
-        # trial_data
-        trial_data = decode_and_coerce_df(
-            trial_data,
-            columns_to_decode=['previously_rewarded_port', 'rewarded_port', 
-                'timestamp_reward', 'timestamp_trial_start', 'group'],
-            columns_to_timestamp=['timestamp_reward', 'timestamp_trial_start'],
-            columns_to_bool=[],
-            tz=tz,
-            )
-        
-        # poke_data
-        poke_data = decode_and_coerce_df(
-            poke_data,
-            columns_to_decode=['poked_port', 'timestamp'],
-            columns_to_timestamp=['timestamp'],
-            columns_to_bool=['first_poke', 'reward_delivered'],
-            tz=tz,
-            )        
-        
-        # sound_data
-        if sound_data is not None:
-            sound_data = decode_and_coerce_df(
-                sound_data,
-                columns_to_decode=['pilot', 'side', 'sound_type', 'locking_timestamp'],
-                columns_to_timestamp=['locking_timestamp'],
-                columns_to_bool=[],
-                tz=tz,
-                )              
+        # Decode and coerce
+        trial_data, poke_data, sound_data = decode_and_coerce_all_df(
+            trial_data, poke_data, sound_data, tz)
 
 
         ## Append
@@ -943,6 +1257,7 @@ def parse_sandboxes(
 
     
     ## Sort everything that we need going forward
+    # From here forward, we only use these four dataframes
     big_trial_df = big_trial_df.sort_index()
     big_poke_df = big_poke_df.sort_index()
     big_session_params = big_session_params.sort_index()
@@ -950,314 +1265,60 @@ def parse_sandboxes(
         big_sound_df = big_sound_df.sort_index()
     
     
-    ## Add columns to big_session_params
-    # Specifically: date, approx_duration_hdf5, trial counts and times,
-    # and protocol_name
-    # The following columns may be null, if they were missing from JSON
-    #   protocol_filename, sandbox_creation_time, camera_name
-    big_session_params['date'] = [datetime.date.fromisoformat(s[:10]) 
-        for s in big_session_params.index.get_level_values('session_name').values]
-    
-    # Add trial quantifications to big_session_params
-    gobj = big_trial_df.groupby(['mouse', 'session_name'])
-    big_session_params['n_trials'] = gobj.size()
-    big_session_params['first_trial'] = gobj['timestamp_trial_start'].min()
-    big_session_params['last_trial'] = gobj['timestamp_trial_start'].max()
-    big_session_params['approx_duration'] = (
-        big_session_params['last_trial'] - big_session_params['first_trial'])
-    
-    # Alternate estimate of session duration
-    big_session_params['approx_duration_hdf5'] = (
-        big_session_params['hdf5_modification_time'] - 
-        big_session_params['first_trial'])
-    
-    # Set protocol_name from protocol_filename
-    assign_protocol_name(big_session_params)
-    
-
     ## Clean up the dataframes by adding columns, etc
+    # Adds date, trial counts, and durations to big_session_params
+    # Assigns protocol name properly in big_session_params
+    process_big_session_params(big_session_params, big_trial_df)
+    
+    # Removes unnecessary columns and calculates duration
     big_trial_df = clean_big_trial_df(big_trial_df)
+    
+    # Drops pokes from before the first trial, after last trial, and those
+    # that can't be aligned to any trial start
+    # Calculates t_wrt_start for each poke
     big_poke_df = clean_big_poke_df(big_poke_df, big_trial_df)
 
 
-    ## Count pokes per trial and check there was at least 1 on every trial
-    # Count pokes
-    n_pokes = big_poke_df.groupby(
-        ['mouse', 'session_name', 'trial']).size().rename('n_pokes')
-    
-    # Join on big_trial_df
-    big_trial_df = big_trial_df.join(n_pokes)
-    big_trial_df['n_pokes'] = big_trial_df['n_pokes'].fillna(0).astype(int)
-    
-    # Very rarely there is a trial with no pokes
-    # Mostly these are on 2023-02-16
-    # But in two cases it happened on the last trial of the session --
-    # Presumably there just wasn't time for a poke
-    big_trial_df['unpoked'] = False
-    big_trial_df.loc[big_trial_df['n_pokes'] == 0, 'unpoked'] = True
-
-    
-    ## Sort pokes by 'timestamp'
+    ## Label poke type and identify trials with no choice made
+    # Sort properly by timestamp (old poke idx is now poke_orig_idx)
     big_poke_df = reorder_pokes_by_timestamp(big_poke_df)
-
     
-    ## Label the type of each poke
-    # target port is 'correct'
-    # prev_target port is 'prev' (presumably consumptive)
-    # all others (currently only one other type) is 'error'
-    big_poke_df['poke_type'] = 'error'
-    big_poke_df.loc[
-        big_poke_df['poked_port'] == big_poke_df['rewarded_port'],
-        'poke_type'] = 'correct'
-    big_poke_df.loc[
-        big_poke_df['poked_port'] == big_poke_df['previously_rewarded_port'],
-        'poke_type'] = 'prev'
-
-
-    ## Identify the choice_poke
-    # This is the mouse's "choice"
-    first_non_prev_poke = big_poke_df[
-        big_poke_df['poke_type'] != 'prev'].reset_index('poke').groupby(
-        ['mouse', 'session_name', 'trial']).first()['poke']
+    # Label poke types
+    # Sets n_pokes and unpoked in big_trial_df
+    # Sets poke_type, choice_poke, consummatory in big_poke_df and
+    #   drops the flawed 'first_poke'
+    # Sets no_choice_made and no_correct_pokes in big_trial_df
+    # big_trial_df now includes the follow bool cols:
+    #   unpoked: no pokes at all
+    #   no_choice_made: no non-PRP pokes
+    #   no_correct_pokes: no correct pokes
+    # These are all pretty rare. The first two can actually happen (eg on 
+    # last trial) but can be artefact. no_correct_pokes is the most common
+    # (0.002) and seems to mostly happen aretefactually. 
+    # Nothing is dropped at this point
+    big_poke_df, big_trial_df = label_poke_types(big_poke_df, big_trial_df)
     
-    # Mark this as the choice_poke
-    big_poke_df['choice_poke'] = False
-    big_poke_df.loc[
-        pandas.MultiIndex.from_frame(first_non_prev_poke.reset_index()),
-        'choice_poke'] = True
+    # Sets 'poke_rank' in big_poke_df and 'rcp', 'outcome', and 
+    # 'first_port_poked' in big_trial_df
+    # 'rcp' is null on all 'no_correct_pokes'
+    # 'first_port_poked' is null and 'outcome' is 'spoiled' on all 'no_choice_made'
+    big_poke_df, big_trial_df = label_trial_outcome(big_poke_df, big_trial_df)
     
-    
-    ## Categorize 'prev' pokes into consummatory or not
-    # Join the poke index of the choice poke
-    # This will be null on trials with no choice poke
-    # (i.e., no pokes, or all prev pokes)
-    big_poke_df = big_poke_df.join(
-        first_non_prev_poke.rename('choice_poke_idx'))    
-    
-    # Mark all pokes after the choice poke
-    # This will be false on trials with no choice poke
-    big_poke_df['after_choice_poke'] = False
-    after_choice_mask = (
-        big_poke_df.index.get_level_values('poke') > 
-        big_poke_df['choice_poke_idx'])
-    big_poke_df.loc[after_choice_mask, 'after_choice_poke'] = True
-    
-    # Subcategorize 'prev' pokes into 'prev_consume' and 'prev_return'
-    # For backwards compatibility, use another column for this instead of
-    # another 'poke type'
-    big_poke_df['consummatory'] = False
-    prev_consume_mask = (
-        (big_poke_df['poke_type'] == 'prev') &
-        ~big_poke_df['after_choice_poke'])
-    big_poke_df.loc[prev_consume_mask, 'consummatory'] = True
-
-    # Drop 'choice_poke_idx' and 'after_choice_poke'
-    big_poke_df = big_poke_df.drop(
-        ['choice_poke_idx', 'after_choice_poke'], axis=1)
-
-    # Error check
-    # All pokes from trials lacking a choice poke should be consummatory
-    # Such trials are extremely rare
-    trials_with_choice_poke_mask = big_poke_df.groupby(
-        ['mouse', 'session_name', 'trial'])['choice_poke'].any()
-    trials_with_no_choice_poke_midx = trials_with_choice_poke.index[
-        ~trials_with_choice_poke.values]
-    pokes_on_such_trials = my.misc.slice_df_by_some_levels(
-        big_poke_df, trials_with_no_choice_poke_midx)
-    assert pokes_on_such_trials['consummatory'].all()
-    assert (pokes_on_such_trials['poke_type'] == 'prev').all()
-    
-    # Label these trials
-    # Include also unpoked trials (which won't show up above because there
-    # were no pokes to find)
-    big_trial_df['no_choice_made'] = big_trial_df['unpoked'].copy()
-    big_trial_df.loc[trials_with_no_choice_poke_midx, 'no_choice_made'] = True
-
-    
-    ## Identify trials lacking a correct poke
-    # These are somewhat common, unfortunately, and concentrated into
-    # 5-10 sessions, which should likely be dropped
-    n_poke_types_by_trial = big_poke_df.groupby(
-        ['mouse', 'session_name', 'trial'])['poke_type'].value_counts().unstack(
-        'poke_type')
-    
-    # Reindex by big_trial_df (to include the trials with no pokes)
-    n_poke_types_by_trial = n_poke_types_by_trial.reindex(
-        big_trial_df.index).fillna(0).astype(int)
-    
-    # Label trials lacking correct poke
-    bad_trials = n_poke_types_by_trial.index[
-        n_poke_types_by_trial['correct'] == 0]
-    big_trial_df['no_correct_pokes'] = False
-    big_trial_df.loc[bad_trials, 'no_correct_pokes'] = True
+    # Convert port names to port dir and calculate err_dist
+    big_poke_df, big_trial_df = calculate_distance_between_choice_ports(
+        big_poke_df, big_trial_df)
 
 
+    ## TODO Add some warning here about unpoked, no_correct_pokes, etc
+    # And maybe drop them
     1/0
-    
 
-    ## Recalculate the first_poke
-    # We can't count on this having been done properly on the rpi
-    # It's not even guaranteed to have been unique
-    
-
-    ## Check whether first_poke was correctly identified
-    n_first_pokes_per_trial = big_poke_df.groupby(
-        ['session_name', 'trial'])['first_poke'].sum()
-    n_first_pokes_per_trial = n_first_pokes_per_trial[
-        n_first_pokes_per_trial != 1]
-    if len(n_first_pokes_per_trial) > 0:
-        txt_to_print = (
-            'warning: non-unique first poke in the following trials:\n' + 
-            str(n_first_pokes_per_trial) + '\n')
-        if not quiet:
-            print(txt_to_print)
-        txt_output += txt_to_print            
-    
-    # Fix this
-    # I think there are at least 3 ways that first_poke can be wrong
-    # First it sometimes is not set for any poke (rarely)
-    # Second it sometimes is set for multiple pokes (rarely)
-    # Third it might be set for the previously rewarded port 
-    first_poke_idx = big_poke_df[big_poke_df['poke_type'] != 'prev'].groupby(
-        ['session_name', 'trial'])['timestamp'].idxmin().values
-    first_poke_midx = pandas.MultiIndex.from_tuples(
-        first_poke_idx, names=big_poke_df.index.names)
-    big_poke_df['first_poke2'] = big_poke_df['first_poke'].copy()
-    big_poke_df['first_poke2'] = False
-    big_poke_df.loc[first_poke_midx, 'first_poke2'] = True
-    
-    # Replace first_poke with first_poke2
-    # In at least one case, this creates a trial that previously had a 
-    # first_poke but now no longer does, because it consists entirely of
-    # pokes on the previously_rewarded_port, one of which was erroneously
-    # labeled first poke initially
-    # 2023-02-16-14-52-42-349196_Moon_2 trial 54
-    big_poke_df['first_poke'] = big_poke_df['first_poke2']
-    big_poke_df = big_poke_df.drop('first_poke2', axis=1)
-
-
-    ## Label the outcome of each trial, based on the type of the first poke
-    # time of first poke of each type
-    first_poke = big_poke_df.reset_index().groupby(
-        ['mouse', 'session_name', 'trial', 'poke_type']
-        )['t_wrt_start'].min().unstack('poke_type')
-
-    # Join
-    big_trial_df = big_trial_df.join(first_poke)
-
-    # Score by first poke (excluding prev)
-    trial_outcome = big_trial_df[['correct', 'error']].idxmin(1)
-    big_trial_df['outcome'] = trial_outcome
-
-
-    ## Label trials by how many ports poked before correct
-    # Get the latency to each port on each trial
-    latency_by_port = big_poke_df.reset_index().groupby(
-        ['mouse', 'session_name', 'trial', 'poked_port'])['t_wrt_start'].min()
-
-    # Drop the consumption port (previous reward)
-    consumption_port = big_trial_df[
-        'previously_rewarded_port'].dropna().reset_index().rename(
-        columns={'previously_rewarded_port': 'poked_port'})
-    cp_idx = pandas.MultiIndex.from_frame(consumption_port)
-    latency_by_port_dropped = latency_by_port.drop(cp_idx, errors='ignore')
-
-    # Unstack the port onto columns
-    lbpd_unstacked = latency_by_port_dropped.unstack('poked_port')
-
-    # Rank them in order of poking
-    # Subtract 1 because it starts with 1
-    # The best is 0 (correct trial) and the worst is 6 (because consumption port
-    # is ignored). The expectation under random choices is 3 (right??)
-    lbpd_ranked = lbpd_unstacked.rank(
-        method='first', axis=1).stack().astype(int) - 1
-
-    # TODO: figure out why rcp is sometimes 7 here
-
-    # Find the rank of the correct port
-    correct_port = big_trial_df['rewarded_port'].dropna().reset_index()
-    cp_idx = pandas.MultiIndex.from_frame(correct_port)
-    rank_of_correct_port = lbpd_ranked.reindex(
-        cp_idx).droplevel('rewarded_port').rename('rcp')
-
-    # Append this to big_big_trial_df
-    big_trial_df = big_trial_df.join(rank_of_correct_port)
-
-    # Error check
-    # TODO: figure out why this is not working
-    #~ assert not big_trial_df['rcp'].isnull().any()
-
-
-    ## Score sessions by fraction correct
-    scored_by_fraction_correct = big_trial_df.groupby(
-        ['mouse', 'session_name'])[
-        'outcome'].value_counts().unstack('outcome').fillna(0)
-    scored_by_fraction_correct['perf'] = (
-        scored_by_fraction_correct['correct'].divide(
-        scored_by_fraction_correct.sum(axis=1)))
-
-
-    ## Score sessions by n_trials
-    scored_by_n_trials = big_trial_df.groupby(
-        ['mouse', 'session_name']).size()
-
-
-    ## Score by n_ports
-    scored_by_n_ports = big_trial_df.groupby(
-        ['mouse', 'session_name'])['rcp'].mean()
-
-
-    ## Extract key performance metrics
-    # This slices out sound-only trials
-    perf_metrics = pandas.concat([
-        scored_by_n_ports.rename('rcp'),
-        scored_by_fraction_correct['perf'].rename('fc'),
-        scored_by_n_trials.rename('n_trials'),
-        ], axis=1, verify_integrity=True)
+    ## Score sessions into perf_metrics
+    perf_metrics = calculate_perf_metrics(big_trial_df)
 
     # Join date
     perf_metrics = perf_metrics.join(
         big_session_params['date'], on=['mouse', 'session_name'])
-
-    #~ # Keep the session with the most trials by date
-    #~ perf_metrics = perf_metrics.groupby(['mouse', 'date']).apply(
-        #~ lambda df: df.sort_values('n_trials').iloc[-1])
-    
-
-    ## Calculate first port poked
-    # TODO: Why is this null in rare cases?
-    # TODO: move this function to paclab repository
-    big_trial_df['first_port_poked'] = big_poke_df[big_poke_df['first_poke']][
-        'poked_port'].droplevel('poke')
-
-    
-    ## Convert port names to port dir
-    big_trial_df = convert_port_name_to_port_dir(big_trial_df)
-    big_poke_df = convert_port_name_to_port_dir(big_poke_df)
-
-
-    ## Calculate errdist
-    # Define fixing function
-    def fix(arr):
-        """Fix angular variable to [-180, 180)"""
-        return np.mod(arr + 180, 360) - 180
-    
-    # Apply fix to each
-    big_trial_df['fpp_wrt_rp'] = fix(
-        big_trial_df['first_port_poked_dir'] - 
-        big_trial_df['rewarded_port_dir'])
-    big_trial_df['fpp_wrt_prp'] = fix(
-        big_trial_df['first_port_poked_dir'] - 
-        big_trial_df['previously_rewarded_port_dir'])
-    big_trial_df['rp_wrt_prp'] = fix(
-        big_trial_df['rewarded_port_dir'] - 
-        big_trial_df['previously_rewarded_port_dir'])
-    big_poke_df['pp_wrt_rp'] = fix(
-        big_poke_df['poked_port_dir'] - 
-        big_poke_df['rewarded_port_dir'])
-    big_poke_df['pp_wrt_prp'] = fix(
-        big_poke_df['poked_port_dir'] - 
-        big_poke_df['previously_rewarded_port_dir'])
 
 
     ## Return
@@ -2485,6 +2546,7 @@ def convert_port_name_to_port_dir(df):
         'previously_rewarded_port', 
         'rewarded_port', 
         'first_port_poked',
+        'choice_poke',
         'poked_port',
         ]
 
