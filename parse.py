@@ -1564,150 +1564,114 @@ def parse_hdf5_files(path_to_terminal_data, mouse_names,
     # This is a weights column that is no longer used
     session_df = session_df.drop('stop', axis=1, errors='ignore')
 
+    
+    ## Before 2022-06-29, the first trial was often 1 instead of 0
+    # The other clue is that previously_rewarded_port was '' in those cases
+    # Fix this
+    subdf_l = []
+    this_poke_data_l = []
+    this_poke_data_keys_l = []
+    for keys, subdf in trial_data.groupby(['mouse', 'session_name']):
+        # Get trial data for this session
+        subdf = subdf.reset_index()
+        
+        # Get corresponding pokedata
+        this_poke_data = poke_data.loc[keys].reset_index()
+        
+        if (
+                subdf['trial'].iloc[0] == 1 and 
+                (subdf['previously_rewarded_port'].iloc[0] == '')):
+            # Relabel trial count
+            subdf['trial'] = subdf['trial'] - 1
+            
+            # Do the same in poke_data
+            this_poke_data['trial'] = this_poke_data['trial'] - 1
+        
+        # Store
+        subdf = subdf.set_index(['mouse', 'session_name', 'trial'])
+        subdf_l.append(subdf)
+        this_poke_data_l.append(this_poke_data.set_index('poke'))
+        this_poke_data_keys_l.append(keys)
+    
+    # Concat
+    trial_data = pandas.concat(subdf_l).sort_index()
+    poke_data = pandas.concat(
+        this_poke_data_l, keys=this_poke_data_keys_l, 
+        names=['mouse', 'session_name']).sort_index()
+    
+    
+    ## Clean trial data
     # Rename
-    trial_data = trial_data.rename(columns={'timestamp_trial_start': 'trial_start'})
+    trial_data = trial_data.rename(
+        columns={'timestamp_trial_start': 'trial_start'})
 
     # Add duration
     trial_data['duration'] = (
         trial_data['trial_start'].shift(-1) - trial_data['trial_start']).apply(
         lambda ts: ts.total_seconds())
 
-
-    ## Add columns to trial_data, and calculate t_wrt_start for pokes
-    # Join 'trial_start' onto poke_data
-    poke_data = poke_data.join(trial_data['trial_start'])
-
-    # Drop pokes without a matching trial start
-    # TODO: check that this only happens for the last trial in a session
-    poke_data = poke_data[~poke_data['trial_start'].isnull()].copy()
-
-    # Normalize poke time to trial start time
-    poke_data['t_wrt_start'] = poke_data['timestamp'] - poke_data['trial_start']
-    poke_data['t_wrt_start'] = poke_data['t_wrt_start'].apply(
-        lambda ts: ts.total_seconds())
+    
+    ## From here on out, this is the same as the newer parsing code
+    ## Clean poke data
+    # Drops pokes from before the first trial, after last trial, and those
+    # that can't be aligned to any trial start
+    # Calculates t_wrt_start for each poke    
+    txt_output = ''
+    poke_data, txt_output = clean_big_poke_df(
+        poke_data, trial_data, txt_output, False)
 
 
-    ## Join rewarded_port and previously_rewarded_port on pokes
-    poke_data = poke_data.join(
-        trial_data[['rewarded_port', 'previously_rewarded_port']], 
-        rsuffix='_correct')
+    ## Label poke type and identify trials with no choice made
+    # Sort properly by timestamp (old poke idx is now poke_orig_idx)
+    poke_data = reorder_pokes_by_timestamp(poke_data)
 
-    # Actually don't do this because then it looks like no pokes on this trial
-    #~ # Drop poke_data rows where previously_rewarded_port is ''
-    #~ # TODO: Check that this is only the first trial in a session
-    #~ # TODO: first trial should be 0 not 1
-    #~ poke_data = poke_data[poke_data['previously_rewarded_port'] != ''].copy()
-
-
-    ## Label the type of each poke
-    # target port is 'correct'
-    # prev_target port is 'prev' (presumably consumptive)
-    # all others (currently only one other type) is 'error'
-    poke_data['poke_type'] = 'error'
-    poke_data.loc[
-        poke_data['poked_port'] == poke_data['rewarded_port'],
-        'poke_type'] = 'correct'
-    poke_data.loc[
-        poke_data['poked_port'] == poke_data['previously_rewarded_port'],
-        'poke_type'] = 'prev'
+    # Label poke types
+    # Sets n_pokes and unpoked in big_trial_df
+    # Sets poke_type, choice_poke, consummatory in big_poke_df and
+    #   drops the flawed 'first_poke'
+    # Sets no_choice_made and no_correct_pokes in big_trial_df
+    # big_trial_df now includes the follow bool cols:
+    #   unpoked: no pokes at all
+    #   no_choice_made: no non-PRP pokes
+    #   no_correct_pokes: no correct pokes
+    # These are all pretty rare. The first two can actually happen (eg on 
+    # last trial) but can be artefact. no_correct_pokes is the most common
+    # (0.002) and seems to mostly happen aretefactually. 
+    # Nothing is dropped at this point
+    poke_data, trial_data = label_poke_types(poke_data, trial_data)
 
 
-    ## Count pokes per trial and check there was at least 1 on every trial
-    n_pokes = poke_data.groupby(
-        ['mouse', 'session_name', 'trial']).size().rename('n_pokes')
-    trial_data = trial_data.join(n_pokes)
-    assert not trial_data['n_pokes'].isnull().any()
-    assert (trial_data['n_pokes'] > 0).all()
+    # Sets 'poke_rank' in big_poke_df and 'rcp', 'outcome', and 
+    # 'first_port_poked' in big_trial_df
+    # 'rcp' is null on all 'no_correct_pokes'
+    # 'first_port_poked' is null and 'outcome' is 'spoiled' on all 'no_choice_made'
+    poke_data, trial_data = label_trial_outcome(poke_data, trial_data)
 
+    # Warn about trials with these errors
+    # TODO: drop them?
+    txt_output = warn_about_munged_trials(trial_data, txt_output, False)
 
-    ## Debug there is always a correct poke
-    n_poke_types_by_trial = poke_data.groupby(
-        ['session_name', 'trial'])['poke_type'].value_counts().unstack(
-        'poke_type').fillna(0).astype(int)
-    assert len(trial_data) == len(n_poke_types_by_trial)
-    assert (n_poke_types_by_trial['correct'] > 0).all()
+    # Convert port names to port dir and calculate err_dist
+    poke_data, trial_data = calculate_distance_between_choice_ports(
+        poke_data, trial_data)
+    
+    
+    ## Score sessions into perf_metrics
+    perf_metrics = calculate_perf_metrics(trial_data)
 
+    # Join date
+    perf_metrics = perf_metrics.join(
+        session_df['date'], on=['mouse', 'session_name'])
 
-    ## Label the outcome of each trial, based on the type of the first poke
-    # time of first poke of each type
-    first_poke = poke_data.reset_index().groupby(
-        ['mouse', 'session_name', 'trial', 'poke_type']
-        )['t_wrt_start'].min().unstack('poke_type')
+    # Join n_session for each mouse
+    session_df['n_session'] = -1
+    for mouse, subdf in session_df.groupby('mouse'):
+        ranked = subdf['first_trial'].rank(method='first').astype(int) - 1
+        session_df.loc[ranked.index, 'n_session'] = ranked.values
+    assert not (session_df['n_session'] == -1).any()
 
-    # Join
-    trial_data = trial_data.join(first_poke)
-
-    # Score by first poke (excluding prev)
-    trial_outcome = trial_data[['correct', 'error']].idxmin(1)
-    trial_data['outcome'] = trial_outcome
-
-
-    ## Label trials by how many ports poked before correct
-    # Get the latency to each port on each trial
-    latency_by_port = poke_data.reset_index().groupby(
-        ['mouse', 'session_name', 'trial', 'poked_port'])['t_wrt_start'].min()
-
-    # Drop the consumption port (previous reward)
-    consumption_port = trial_data[
-        'previously_rewarded_port'].dropna().reset_index().rename(
-        columns={'previously_rewarded_port': 'poked_port'})
-    cp_idx = pandas.MultiIndex.from_frame(consumption_port)
-    latency_by_port_dropped = latency_by_port.drop(cp_idx, errors='ignore')
-
-    # Unstack the port onto columns
-    lbpd_unstacked = latency_by_port_dropped.unstack('poked_port')
-
-    # Rank them in order of poking
-    # Subtract 1 because it starts with 1
-    # The best is 0 (correct trial) and the worst is 6 (because consumption port
-    # is ignored). The expectation under random choices is 3 (right??)
-    lbpd_ranked = lbpd_unstacked.rank(
-        method='first', axis=1).stack().astype(int) - 1
-
-    # Find the rank of the correct port
-    correct_port = trial_data['rewarded_port'].dropna().reset_index()
-    cp_idx = pandas.MultiIndex.from_frame(correct_port)
-    rank_of_correct_port = lbpd_ranked.reindex(
-        cp_idx).droplevel('rewarded_port').rename('rcp')
-
-    # Append this to big_trial_data
-    trial_data = trial_data.join(rank_of_correct_port)
-
-    # Error check
-    assert not trial_data['rcp'].isnull().any()
-
-
-    ## Score sessions by fraction correct
-    scored_by_fraction_correct = trial_data.groupby(
-        ['mouse', 'session_name'])[
-        'outcome'].value_counts().unstack('outcome').fillna(0)
-    scored_by_fraction_correct['perf'] = (
-        scored_by_fraction_correct['correct'].divide(
-        scored_by_fraction_correct.sum(axis=1)))
-
-
-    ## Score sessions by n_trials
-    scored_by_n_trials = trial_data.groupby(['mouse', 'session_name']).size()
-
-
-    ## Score by n_ports
-    scored_by_n_ports = trial_data.groupby(['mouse', 'session_name'])['rcp'].mean()
-
-
-    ## Extract key performance metrics
-    # This slices out sound-only trials
-    perf_metrics = pandas.concat([
-        scored_by_n_ports.rename('rcp'),
-        scored_by_fraction_correct['perf'].rename('fc'),
-        scored_by_n_trials.rename('n_trials'),
-        ], axis=1, verify_integrity=True)
-
-    # Join on weight and date (now date only)
-    perf_metrics = perf_metrics.join(session_df[['date']])
-
-    # Index by date
-    perf_metrics = perf_metrics.reset_index().set_index(
-        ['mouse', 'date']).sort_index()
+    # Join n_session on perf_metrics
+    perf_metrics = perf_metrics.join(session_df['n_session'])
     
     
     ## Return
@@ -1920,15 +1884,6 @@ def load_data_from_all_mouse_hdf5(mouse_names, munged_sessions,
         print("remove one of these sessions:\n{}".format(bad_sessions))
 
 
-    ## These weights columns are no longer used
-    # Nullify zero weights
-    #~ session_df.loc[session_df['weight'] < 1, 'weight'] = np.nan
-    
-    #~ # Drop useless columns from session_df
-    #~ session_df = session_df.drop(
-        #~ ['weights_date_string', 'weights_dt_start'], axis=1)
-    
-    
     ## Drop columns from trial_data that are redundant with session_df
     # (because this is how they were aligned)
     trial_data = trial_data.drop(
@@ -2358,44 +2313,6 @@ def load_data_from_single_hdf5(mouse_name, h5_filename,
         axis=1)
     
     
-    ## Something is messed up with the weights for Bluefish_027 on 6-29
-    ## Just don't do any of the weight stuff
-    if False:
-        ## Align session_df with mouse_weights
-        # The assumption here is that each is unique based on 
-        # ['date', 'orig_session_num']. Otherwise this won't work.
-        assert not session_df[['date', 'orig_session_num']].duplicated().any()
-        
-        # Check for duplicates in mouse_weights
-        dup_check = mouse_weights[['date', 'orig_session_num']].duplicated() 
-        if dup_check.any():
-            # Not sure why this is happening, must be some bug in the way it
-            # was stored
-            # Just drop the duplicates
-            print("warning: duplicate sessions in {} mouse_weights on {}".format(
-                mouse_name,
-                ", ".join(map(str, mouse_weights.loc[dup_check, 'date'].values))
-                ))
-            mouse_weights = mouse_weights[~dup_check].copy()
-
-        # Rename the weights columns to be more meaningful after merge
-        mouse_weights = mouse_weights.rename(columns={
-            'date_string': 'weights_date_string',
-            'dt_start': 'weights_dt_start',
-            })
-        
-        # Left merge, so we always have the same length as session_df
-        # This drops extra rows in `mouse_weights`, corresponding to sessions
-        # with no trials, typically after a munging event, which is fine
-        session_df = pandas.merge(
-            session_df, mouse_weights, how='left', 
-            on=['date', 'orig_session_num'])
-        
-        # Make sure there was an entry in weights for every session
-        # This is no longer true because of the dup_check drop above
-        assert not session_df.isnull().any().any()
-
-
     ## Add the unique session_name to mouse_trial_data
     # Align on these columns which should uniquely defined
     join_on = ['box', 'protocol', 'date', 'orig_session_num']
