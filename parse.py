@@ -261,7 +261,6 @@ def check_for_corrupted_trial_data(
         if not quiet:
             print(txt_to_print.strip())
         txt_output += txt_to_print   
-        1/0
 
     # These are trial numbers that occurred more than once
     duplicate_trials_mask = trial_data['trial_in_session'].duplicated()
@@ -971,6 +970,7 @@ def warn_about_munged_trials(big_trial_df, txt_output, quiet):
     Returns: txt_output
         Potentially with new warnings added
     """
+    ## Check for unpoked
     bad_sessions = big_trial_df[
         big_trial_df['unpoked']].groupby('session_name').size()
     
@@ -981,14 +981,15 @@ def warn_about_munged_trials(big_trial_df, txt_output, quiet):
             str(bad_sessions),
             ))
 
-    # Print if no quiet
-    if not quiet:
-        print(txt_to_print)
+        # Print if no quiet
+        if not quiet:
+            print(txt_to_print)
 
-    # Store the text
-    txt_output += txt_to_print
+        # Store the text
+        txt_output += txt_to_print
 
-
+    
+    ## Check for no_choice_madeno_choice_made
     bad_sessions = big_trial_df[
         big_trial_df['no_choice_made']].groupby('session_name').size()
     
@@ -999,14 +1000,15 @@ def warn_about_munged_trials(big_trial_df, txt_output, quiet):
             str(bad_sessions),
             ))
 
-    # Print if no quiet
-    if not quiet:
-        print(txt_to_print)
+        # Print if no quiet
+        if not quiet:
+            print(txt_to_print)
 
-    # Store the text
-    txt_output += txt_to_print
+        # Store the text
+        txt_output += txt_to_print
     
     
+    ## Check for no_correct_pokes
     bad_sessions = big_trial_df[
         big_trial_df['no_correct_pokes']].groupby('session_name').size()
     
@@ -1017,12 +1019,12 @@ def warn_about_munged_trials(big_trial_df, txt_output, quiet):
             str(bad_sessions),
             ))
 
-    # Print if no quiet
-    if not quiet:
-        print(txt_to_print)
+        # Print if no quiet
+        if not quiet:
+            print(txt_to_print)
 
-    # Store the text
-    txt_output += txt_to_print    
+        # Store the text
+        txt_output += txt_to_print    
     
     return txt_output
 
