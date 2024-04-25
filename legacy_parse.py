@@ -595,13 +595,14 @@ def load_data_from_single_hdf5(mouse_name, h5_filename,
                 box : 'Box1' or 'Box2', inferred from rpi name
                 date : datetime.date, the date of the session
     """
+    ## This is used for all timestamps
+    tz = pytz.timezone('America/New_York')
+    
+    
     ## Load trial data and weights
     cannot_load = False
     try:
         with tables.open_file(h5_filename) as fi:
-            # Get the weights
-            mouse_weights = pandas.DataFrame(fi.root['history']['weights'][:])            
-
             # Either get all contained protocols or just the provided one
             if protocol_name is None:
                 # Use all of them
@@ -677,90 +678,18 @@ def load_data_from_single_hdf5(mouse_name, h5_filename,
     # Drop those trials, hopefully nothing else breaks
     mouse_trial_data = mouse_trial_data[
         mouse_trial_data['timestamp_trial_start'] != b''].copy()
-    
+
 
     ## Coerce dtypes for mouse_trial_data
-    # Decode columns that are bytes
-    for decode_col in ['previously_rewarded_port', 'rewarded_port', 
-            'timestamp_reward', 'timestamp_trial_start']:
-        mouse_trial_data[decode_col] = (
-            mouse_trial_data[decode_col].str.decode('utf-8')
-            )
-
-    # Coerce timestamp to datetime
-    for timestamp_column in ['timestamp_reward', 'timestamp_trial_start']:
-        mouse_trial_data[timestamp_column] = (
-            mouse_trial_data[timestamp_column].apply(
-            lambda s: datetime.datetime.fromisoformat(s)))
-
-    # Coerce the columns that are boolean
-    bool_cols = []
-    for bool_col in bool_cols:
-        mouse_trial_data[bool_col] = mouse_trial_data[bool_col].replace(
-            {'True': True, 'False': False}).astype(bool)
-
-    
-    ## Coerce dtypes for mouse_poke_data
-    # Decode columns that are bytes
-    for decode_col in ['poked_port', 'timestamp']:
-        mouse_poke_data[decode_col] = mouse_poke_data[
-            decode_col].str.decode('utf-8')
-
-    # Coerce timestamp to datetime
-    for timestamp_column in ['timestamp']:
-        mouse_poke_data[timestamp_column] = (
-            mouse_poke_data[timestamp_column].apply(
-            lambda s: datetime.datetime.fromisoformat(s)))
-
-    # Coerce the columns that are boolean
-    bool_cols = ['first_poke', 'reward_delivered']
-    for bool_col in bool_cols:
-        try:
-            mouse_poke_data[bool_col] = mouse_poke_data[bool_col].replace(
-                {1: True, 0: False}).astype(bool)
-        except KeyError:
-            print("warning: missing bool_col {}".format(bool_col))
+    mouse_trial_data, mouse_poke_data, mouse_sound_data = (
+        decode_and_coerce_all_df(
+            mouse_trial_data, 
+            mouse_poke_data, 
+            mouse_sound_data, 
+            tz, 
+            old_data=True))
 
 
-    ## Coerce dtypes for mouse_sound_data
-    if mouse_sound_data is not None:
-        # Decode columns that are bytes
-        for decode_col in ['pilot', 'side', 'sound_type', 'locking_timestamp']:
-            mouse_sound_data[decode_col] = mouse_sound_data[
-                decode_col].str.decode('utf-8')
-
-        # Coerce timestamp to datetime
-        for timestamp_column in ['locking_timestamp']:
-            mouse_sound_data[timestamp_column] = (
-                mouse_sound_data[timestamp_column].apply(
-                lambda s: datetime.datetime.fromisoformat(s)))
-    
-    
-    ## Coerce dtypes for mouse_weights
-    # Rename more meaningfully
-    mouse_weights = mouse_weights.rename(columns={'date': 'date_string'})
-    
-    # Decode
-    mouse_weights['date_string'] = mouse_weights[
-        'date_string'].str.decode('utf-8')
-
-    # Convert 'date_string' to Timestamp
-    mouse_weights['dt_start'] = mouse_weights['date_string'].apply(
-        lambda s: datetime.datetime.strptime(s, '%y%m%d-%H%M%S'))
-    
-    # Calculate raw date (dropping time)
-    mouse_weights['date'] = mouse_weights['dt_start'].apply(
-        lambda dt: dt.date())
-    
-    
-    ## Drop useless columns
-    # Rename meaningfully
-    mouse_weights = mouse_weights.rename(columns={
-        'start': 'weight',
-        'session': 'orig_session_num',
-        })
-
-    
     ## Asign 'box' based on 'rpi'
     # For mouse_trial_data
     mouse_trial_data['box'] = '???'
