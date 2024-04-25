@@ -295,13 +295,19 @@ def decode_and_coerce_df(
     
     Returns: new version of df
     """
+    # Copy to avoid view
+    df = df.copy()
+    
+    # Decode
     for decode_col in columns_to_decode:
         df[decode_col] = df[decode_col].str.decode('utf-8')
     
+    # Timestamp and localize
     for timestamp_col in columns_to_timestamp:
         df[timestamp_col] = df[timestamp_col].apply(
             datetime.datetime.fromisoformat).dt.tz_localize(tz)
     
+    # Bool
     for bool_col in columns_to_bool:
         df[bool_col] = df[bool_col].replace({
             'True': True, 'False': False}).astype(bool)
@@ -921,7 +927,7 @@ def calculate_perf_metrics(big_trial_df):
 
     return perf_metrics
 
-def decode_and_coerce_all_df(trial_data, poke_data, sound_data, tz):
+def decode_and_coerce_all_df(trial_data, poke_data, sound_data, tz, old_data=False):
     """Decodes and coerces these dataframes
     
     Doesn't drop any data.
@@ -929,10 +935,17 @@ def decode_and_coerce_all_df(trial_data, poke_data, sound_data, tz):
     Returns: trial_data, poke_data, sound_data
     """
     # trial_data
+    # compatibility with summer 2022 data which lacked 'group'
+    if old_data:
+        columns_to_decode = ['previously_rewarded_port', 'rewarded_port', 
+            'timestamp_reward', 'timestamp_trial_start']
+    else:
+        columns_to_decode = ['previously_rewarded_port', 'rewarded_port', 
+            'timestamp_reward', 'timestamp_trial_start', 'group']
+    
     trial_data = decode_and_coerce_df(
         trial_data,
-        columns_to_decode=['previously_rewarded_port', 'rewarded_port', 
-            'timestamp_reward', 'timestamp_trial_start', 'group'],
+        columns_to_decode=columns_to_decode,
         columns_to_timestamp=['timestamp_reward', 'timestamp_trial_start'],
         columns_to_bool=[],
         tz=tz,
