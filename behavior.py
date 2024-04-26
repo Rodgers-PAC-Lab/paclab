@@ -215,11 +215,30 @@ def match_videos_with_behavior(video_dir, session_df, quiet=False):
             "error: cannot check for missing video if there are "
             "duplicated sessions\n")
     else:    
+        # Helper function
+        def infer_name(filename):
+            """Convert video filename to camera name"""
+            # Return null if null
+            if pandas.isnull(filename):
+                return ''
+            
+            # Sometimes it starts with Box- or Box_
+            if filename.startswith('Box'):
+                filename = filename[5:]
+            
+            # Remove date etc
+            camera_name = filename.split('-')[0]
+
+            # Error check
+            if len(camera_name) != 7:
+                1/0
+            
+            return camera_name
+        
         ## Extract inferred camera name
         # Extract the inferred camera name from the filename
         aligned_videos_df['inferred_camera_name'] = (
-            aligned_videos_df['video_filename'].apply(
-            lambda s: s[:7] if not pandas.isnull(s) else ''))
+            aligned_videos_df['video_filename'].apply(infer_name))
 
         # Ensure these match
         mistaken_cameras_mask = (
