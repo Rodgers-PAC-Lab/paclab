@@ -771,7 +771,7 @@ def label_poke_types(big_poke_df, big_trial_df):
     
     return big_poke_df, big_trial_df
 
-def label_trial_outcome(big_poke_df, big_trial_df, exclude_prp=True):
+def label_trial_outcome(big_poke_df, big_trial_df):
     """Label outcome of each trial
     
     * Set big_trial_df['outcome']
