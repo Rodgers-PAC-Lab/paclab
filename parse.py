@@ -771,7 +771,7 @@ def label_poke_types(big_poke_df, big_trial_df):
     
     return big_poke_df, big_trial_df
 
-def label_trial_outcome(big_poke_df, big_trial_df):
+def label_trial_outcome(big_poke_df, big_trial_df, exclude_prp=True):
     """Label outcome of each trial
     
     * Set big_trial_df['outcome']
@@ -1596,7 +1596,14 @@ def convert_port_name_to_port_dir(df):
     
     # Turn this into a replacing dict
     replacing_d = box_port_dir_df.set_index('port')['dir'].to_dict()
-    replacing_d[''] = np.nan # use nan for blanks    
+    
+    # Replace blanks with nan
+    # Except that I think blanks are often marked by np.nan not '' in these
+    # columns
+    replacing_d[''] = np.nan 
+    
+    # Turn the replacing dict into a Series
+    replacing_s = pandas.Series(replacing_d)
 
     # Copy
     res = df.copy()
@@ -1614,7 +1621,9 @@ def convert_port_name_to_port_dir(df):
     for replace_col in replace_cols:
         if replace_col in res.columns:
             # Replace
-            res[replace_col + '_dir'] = res[replace_col].replace(replacing_d)
+            # The use of "map" instead of "replace" avoids a warning
+            # about downcasting
+            res[replace_col + '_dir'] = res[replace_col].map(replacing_s)
 
     return res
 
