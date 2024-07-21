@@ -1709,8 +1709,9 @@ def load_sounds_played(h5_filename, session_start_time):
     # before the session started. Maybe a leftover network packet?
     drop_mask = sounds_played_df['message_time_in_session'] < 0
     if drop_mask.any():
-        print("warning: dropping {} sounds from before session started".format(
-            drop_mask.sum()))
+        # No longer warn about this because it happens almost every time
+        #~ print("warning: dropping {} sounds from before session started".format(
+            #~ drop_mask.sum()))
         sounds_played_df = sounds_played_df[~drop_mask].copy()
     
 
