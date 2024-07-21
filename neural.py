@@ -8,7 +8,15 @@ import my
 import my.plot
 
 def load_analog_data(analog_packed_filename):
-    """Check filesize on analog_packed_filename and return memmap"""
+    """Check filesize on analog_packed_filename and return memmap
+    
+    At present:
+    trig_signal = analog_mm[:, 0]
+    trial_start_signal = analog_mm[:, 1]
+    speaker_signal = analog_mm[:, 2]
+    video_sync_signal = analog_mm[:, 3]
+    video_save_signal = analog_mm[:, 4]    
+    """
     # Check size
     analog_packed_file_size_bytes = os.path.getsize(analog_packed_filename)
     analog_packed_file_size_samples = analog_packed_file_size_bytes // 32 // 2
@@ -38,6 +46,41 @@ def load_neural_data(neural_packed_filename):
     )   
     
     return neural_mm
+
+def get_video_start_time(video_save_signal, multiple_action='error'):
+    """Return the time (in samples) of the recording start pulse
+    
+    trig_signal : array-like
+        The trigger signal
+    
+    multiple_action : string or None
+        Controls what happens if multiple triggers detected
+        'error': raise ValueError
+        'warn' or 'warning': print warning
+        anything else : do nothing
+    
+    An error occurs if this trigger is too short or too long
+    
+    If multiple triggers are detected, they are all returned in an array
+    If only one, then only that one is returned
+    """
+    # Find threshold crossings
+    # 10.0V = 32768 (I think?), so 3.3V = 10813
+    # Take the first sample that exceeds roughly half that
+    trig_time_a, trig_duration_a = (
+        my.syncing.extract_onsets_and_durations(
+        video_save_signal, delta=5000, verbose=False, maximum_duration=np.inf))
+    
+    if len(trig_time_a) != 1:
+        if multiple_action == 'error':
+            raise ValueError("expected 1 trig, got {}".format(len(trig_time_a)))
+        elif multiple_action in ['warn', 'warning']:
+            print("warning: expected 1 trig, got {}".format(len(trig_time_a)))
+
+    if len(trig_time_a) == 1:
+        return trig_time_a[0]
+    else:
+        return trig_time_a    
 
 def get_recording_start_time(trig_signal, multiple_action='error'):
     """Return the time (in samples) of the recording start pulse
