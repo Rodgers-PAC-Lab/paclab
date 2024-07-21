@@ -163,6 +163,9 @@ def cedric_ad_sheet(drop_long_columns=True):
             sheet.columns = [
                 normalize_case_of_string(col) for col in sheet.columns]
             
+            # Label row numbers starting with 2 to match google sheet
+            sheet.index = sheet.index.values + 2
+            
             # Store
             res_d[sheet_name] = sheet
     
