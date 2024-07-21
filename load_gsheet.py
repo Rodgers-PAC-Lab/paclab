@@ -2,8 +2,62 @@
 
 import requests
 import pandas
+import numpy as np
+import io
 
-def cedric_ad_sheet():
+
+def normalize_case_of_string(s):
+    """Lower-case string and replace spaces with underscores"""
+    return s.lower().replace(' ', '_')
+
+def normalize_list_of_channels(ser):
+    """Convert channel numbers data into a tuple of ints or None
+    
+    ser : pandas.Series to convert
+    
+    For each value in ser:
+        If value is null:
+            return None
+        If value is string-like
+            Separate by commas, convert to a tuple of integers
+        Otherwise
+            Assume it's a single number and return a tuple comprising just
+            that number
+    
+    Returns: list of new values
+    """
+    new_values_l = []
+    for key, value in ser.items():
+        if pandas.isnull(value):
+            tup = None
+        
+        elif hasattr(value, '__len__'):
+            # It's probably string-like
+            try:
+                tup = tuple(sorted(map(int, value.split(','))))
+            except ValueError:
+                print('warning: cannot convert ' +
+                    'the value `{}` to a tuple of integers '.format(value) +
+                    'in {} entry {}'.format(ser.name, key)
+                    )
+                tup = None
+        
+        else:
+            # It might be a single value
+            try:
+                tup = tuple([int(value)])
+            except ValueError:
+                print('warning: cannot convert ' +
+                    'the value `{}` to a tuple of integers '.format(value) +
+                    'in {} entry {}'.format(ser.name, key)
+                    )
+                tup = None         
+
+        new_values_l.append(tup)
+    
+    return new_values_l
+    
+def cedric_ad_sheet(drop_long_columns=True):
     """Load data from 'AD Mice Synchronization Table' into dict
     
     This can take some time to run, a few seconds. Sometimes up to 10 s, and
@@ -21,13 +75,42 @@ def cedric_ad_sheet():
     
     Returns: DataFrame
         Index: MultiIndex with levels ('mouse_name', 'row')
-        Columns: [
-            'Session Date', 'Mouse Name', 'Video_filename', 'Analog_file', 
-            'Recording number', 'Logger', 'Logger_file', 'Behavior_file', 
-            'Kilosort_Folder', 'Manually_Sorted', 'Number of neurons',
-            'Broken Channels based on tetrode notes', 'Broken on view', 
-            'Notes', 'Exclude', 'truncate_last_N_samples', 'Mouse Name  '
-            ]
+        Columns: 
+            'session_date' : datetime.date
+                The date of the session
+            'video_filename' : string or null
+                Video filename (without full path)
+            'analog_file' : string or null
+                Directory name of analog data (without full path)
+            'recording_number' : float or null
+                If not null, the recording number
+            'logger' : string or null
+                The logger name
+                One of: '62BA62', '62BB7C'
+                TODO: why is this sometimes null?
+            'logger_file': string or null
+                If not null, the neural filename (without full path)
+            'behavior_file': string or null
+                If not null, the behavior filename (without full path)
+            'kilosort_folder': string or null
+                If not null, the kilosort directory (without full path)
+            'manually_sorted' : bool
+                True if the original spreadsheet said Yes or yes
+                False otherwise, including nulls
+            'number_of_neurons': float or null
+            'broken_channels_based_on_tetrode_notes': tuple or None
+                If a tuple, it will be a list of integers of broken channels
+                for this implant
+            'broken_on_view': tuple or None
+                If a tuple, it will be a list of integer of channels that 
+                appeared to broken for this session
+            'notes' : string or none
+            'exclude' : bool
+                True if it was True in the spreadsheet or had weird text in it
+                False if it was False in the spreadsheet or blank
+            'truncate_last_N_samples' : float or None
+                How many samples to truncate from the end before sorting
+                Are we still doing this?
     """
     # Get URL
     # The sheet must be visible to anyone with the link
@@ -44,17 +127,26 @@ def cedric_ad_sheet():
         'Visual_channel_table', 'Mice',
         ]    
     
-    # Skip these columns .. usually redundant with sheet name
+    # Skip these columns (in normalized case)
     skip_columns = [
-        'Mouse Name'
+        'mouse_name', # usually redundant with sheet name
+        'truncate_last_n_samples', # not using anymore?
         ]
+    
+    # Optionally skip these
+    if drop_long_columns:
+        skip_columns += [
+            'notes', 
+            'broken_on_view', 
+            'broken_channels_based_on_tetrode_notes',
+            ]
     
     # Get data
     request_data = requests.get(url)
-    
+
     # Parse each sheet into a dict
     res_d = {}
-    with pandas.ExcelFile(request_data.content) as excel_file:
+    with pandas.ExcelFile(io.BytesIO(request_data.content)) as excel_file:
         # Iterate over sheets
         for sheet_name in excel_file.sheet_names:
             # Skip these
@@ -63,6 +155,10 @@ def cedric_ad_sheet():
             
             # Read this sheet
             sheet = pandas.read_excel(excel_file, sheet_name)
+
+            # Fix the column names
+            sheet.columns = [
+                normalize_case_of_string(col) for col in sheet.columns]
             
             # Store
             res_d[sheet_name] = sheet
@@ -73,6 +169,43 @@ def cedric_ad_sheet():
     
     # Drop skip_columns
     df = df.drop(skip_columns, axis=1, errors='ignore')
+
+    # Set the date column to be a datetime.date instead of a timestamp
+    df['session_date'] = df['session_date'].dt.date
+    
+    # Fix the logger name
+    df['logger'] = df['logger'].replace({
+        'A62': '62BA62',
+        'logger_62BB7C': '62BB7C',
+        'logger_62BA62': '62BA62',
+        })
+    
+    # Fix exclude by making it bool with default False
+    df['exclude'] = df['exclude'].fillna(0)
+    bad_exclude_vals = ~df['exclude'].isin([0, 1])
+    if bad_exclude_vals.any():
+        print(
+            "The following values in 'exclude' need to be replaced with "
+            "True or False: ")
+        print(df['exclude'].loc[bad_exclude_vals])
+        print()
+        
+        # Assume those bad values do need to be excluded
+        df.loc[bad_exclude_vals, 'exclude'] = 1
+    df['exclude'] = df['exclude'].astype(bool)
+    
+    # Fix 'broken_channels_based_on_tetrode_notes'
+    # Make it a tuple of integers, or None
+    if 'broken_channels_based_on_tetrode_notes' in df.columns:
+        df['broken_channels_based_on_tetrode_notes'] = (
+            normalize_list_of_channels(
+            df['broken_channels_based_on_tetrode_notes']))
+    
+    # Fix 'broken_on_view'
+    # Make it a tuple of integers, or None
+    if 'broken_on_view' in df.columns:
+        df['broken_on_view'] = normalize_list_of_channels(
+            df['broken_on_view'])
     
     return df
     
