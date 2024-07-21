@@ -111,6 +111,9 @@ def cedric_ad_sheet(drop_long_columns=True):
             'truncate_last_N_samples' : float or None
                 How many samples to truncate from the end before sorting
                 Are we still doing this?
+            'drop_first_N_analog_triggers' : float or None
+                How many analog triggers to drop from the beginning before
+                syncing
     """
     # Get URL
     # The sheet must be visible to anyone with the link
