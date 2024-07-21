@@ -88,6 +88,10 @@ def make_plot(
     downsample=1, scaling_factor=6250./32768,
     inter_ch_spacing=234,
     max_data_size=1e7, highpass=False,
+    spike_samples=None,
+    spike_channels=None,
+    spike_colors=None,
+    plot_kwargs={},
     ):
     """Plot a vertical stack of channels in the same ax.
     
@@ -104,8 +108,14 @@ def make_plot(
         Default is (0, len(data))
     
     ch_list : a list of the channels to include, expressed as indices into
-        the columns of `data`. This also determines the order in which they
-        will be plotted (from top to bottom of the figure)
+        the columns of `data`. 
+    
+    ch_labels : list, same length as ch_list
+        Each trace will be labeled
+    
+    ch_ypos : list, same length as ch_list
+        The order they will be plotted in, ie the one with lowest ch_ypos
+        will be plotted at the top
     
     exclude_ch_list : remove these channels from `ch_list`
     
@@ -126,6 +136,13 @@ def make_plot(
         If None, do not filter
     
     plot_kwargs : a dict to pass to `plot`, containing e.g. linewidth
+    
+    spike_samples, spike_channels : array-like
+        If either is None, nothing happens
+        These should be the same length
+        These are the times of spikes (in samples) and the channels of 
+        each spike (expressed as indices into ch_list).
+        They will be overplotted in red. 
     """
     # data range in seconds
     t = np.arange(n_range[0], n_range[1]) / sampling_rate
@@ -172,8 +189,39 @@ def make_plot(
     for ncol, col in enumerate(got_data.T):
         ypos = ch_ypos[ncol]
         y_offset = -inter_ch_spacing * ypos
-        ax.plot(t_ds, col + y_offset, 'k', lw=.75, clip_on=False)
+        ax.plot(t_ds, col + y_offset, 'k', clip_on=False, **plot_kwargs)
 
+    
+    ## Overplot the spikes
+    if spike_samples is not None and spike_channels is not None:
+        # Convert to int
+        spike_channels = spike_channels.astype(int)
+        spike_samples = spike_samples.astype(int)
+        assert len(spike_channels) == len(spike_samples)
+        
+        # Iterate over every spike
+        zobj = zip(spike_samples, spike_channels, spike_colors)
+        for spike_sample, spike_channel, spike_color in zobj:
+            # Get the time of this spike relative to got_data
+            n_spike = (spike_sample - n_range[0]) // downsample
+            n_spike_start = n_spike - (20 // downsample)
+            n_spike_stop = n_spike + (20 // downsample)
+            
+            # Convert to real time
+            t_spike_range = t_ds[n_spike_start:n_spike_stop]
+            
+            # Grab a slice of data
+            y_spike = got_data[n_spike_start:n_spike_stop, spike_channel]
+            
+            # Where to plot it
+            y_offset = -inter_ch_spacing * ch_ypos[spike_channel]
+            
+            # Plot it
+            ax.plot(t_spike_range, y_spike + y_offset, color=spike_color, 
+                lw=1)
+
+
+    ## Pretty
     # title
     ax.set_title('distance between channels = {} uV'.format(inter_ch_spacing))
 
