@@ -1740,6 +1740,7 @@ def load_sounds_played(h5_filename, session_start_time):
         ## Deal with wraparound
         # message_frame can wrap around 2**31 to -2**31
         subdf['message_frame'] = subdf['message_frame'].astype(np.int64)
+        subdf['speaker_frame'] = subdf['speaker_frame'].astype(np.int64)
         #int32_info = np.iinfo(np.int32)
         
         # Detect by this huge offset
