@@ -1,7 +1,7 @@
 # These are annoying dependencies so don't import syncing by default it __init__
 import ns5_process.AudioTools
-import MCwatch.behavior
 import scipy.signal
+import my
 
 def get_trial_start_times(trial_start_signal, analog_fs=25000.):
     """Return the time (in seconds) of each trial start pulse"""
@@ -17,7 +17,7 @@ def get_trial_start_times(trial_start_signal, analog_fs=25000.):
     # afterwards by a short one (1702 samples)
     # It seems like we should drop the long one and keep the short one (why?)
     trial_start_times, trial_start_pulse_duration_a = (
-        MCwatch.behavior.syncing.extract_onsets_and_durations(
+        my.syncing.extract_onsets_and_durations(
         trial_start_signal, delta=5000, verbose=False, maximum_duration=5000))
     
     #~ # Edge case: I think often the first one is too short
