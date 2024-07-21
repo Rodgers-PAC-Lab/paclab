@@ -4,6 +4,7 @@ import os
 import numpy as np
 import scipy
 import matplotlib.pyplot as plt
+import my
 import my.plot
 
 def load_analog_data(analog_packed_filename):
@@ -55,9 +56,6 @@ def get_recording_start_time(trig_signal, multiple_action='error'):
     If multiple triggers are detected, they are all returned in an array
     If only one, then only that one is returned
     """
-    import MCwatch.behavior
-
-
     # Find threshold crossings
     # 10.0V = 32768 (I think?), so 3.3V = 10813
     # Take the first sample that exceeds roughly half that
@@ -65,7 +63,7 @@ def get_recording_start_time(trig_signal, multiple_action='error'):
     # There is a pulse about 6000 samples long at the very beginning, which I
     # think is when the nosepoke is initialized
     trig_time_a, trig_duration_a = (
-        MCwatch.behavior.syncing.extract_onsets_and_durations(
+        my.syncing.extract_onsets_and_durations(
         trig_signal, delta=5000, verbose=False, maximum_duration=5000))
     
     if len(trig_time_a) != 1:
