@@ -48,7 +48,14 @@ def load_neural_data(neural_packed_filename):
     return neural_mm
 
 def get_video_start_time(video_save_signal, multiple_action='error'):
-    """Return the time (in samples) of the recording start pulse
+    """Return the time (in samples) of the video save pulse
+    
+    The video save signal in Room C is frequently incorrect. It's supposed
+    to be high throughout the recording. Instead, it is frequently pulsed
+    high for just 5 ms or so, sometimes multiple times, or never goes
+    high at all. I don't know if the 5 ms pulse actually maps onto the
+    start of the video or not. This might be because the saving command
+    is only guaranteed for the control camera, or something like that.
     
     trig_signal : array-like
         The trigger signal
@@ -58,11 +65,13 @@ def get_video_start_time(video_save_signal, multiple_action='error'):
         'error': raise ValueError
         'warn' or 'warning': print warning
         anything else : do nothing
-    
-    An error occurs if this trigger is too short or too long
-    
-    If multiple triggers are detected, they are all returned in an array
-    If only one, then only that one is returned
+
+    Returns: start_times, durations
+        start_times: start time in  samples
+        durations: duration in samples
+            
+        If multiple triggers are detected, they are all returned in an array
+        If only one, then only that one is returned
     """
     # Find threshold crossings
     # 10.0V = 32768 (I think?), so 3.3V = 10813
@@ -78,9 +87,9 @@ def get_video_start_time(video_save_signal, multiple_action='error'):
             print("warning: expected 1 trig, got {}".format(len(trig_time_a)))
 
     if len(trig_time_a) == 1:
-        return trig_time_a[0]
+        return trig_time_a[0], trig_duration_a[0]
     else:
-        return trig_time_a    
+        return trig_time_a, trig_duration_a
 
 def get_recording_start_time(trig_signal, multiple_action='error'):
     """Return the time (in samples) of the recording start pulse
