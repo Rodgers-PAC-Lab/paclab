@@ -1846,6 +1846,11 @@ def load_flash_df(h5_filename):
     each pi sent a message on every trial, otherwise this will get messed up.
     As a check for this, we make sure that there's never more than a 200 ms
     difference between the last pi and the first pi on any trial.
+
+    # this plots latency across pis
+    # plot(flash_df_wrt_session_start.sub(flash_df_wrt_session_start['trial_start'], axis=0))
+    # Looks like it takes about about 80 ms to reach rpi01 and 120ms to reach rpi04,
+    # with random spikes in this latency on some trials.
     
     Returns : DataFrame
         index: trial number
