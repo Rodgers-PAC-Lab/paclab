@@ -1753,6 +1753,10 @@ def load_sounds_played(h5_filename, session_start_time):
             subdf.loc[fix_mask, 'message_frame'] += 2 ** 32
             subdf.loc[fix_mask, 'speaker_frame'] += 2 ** 32
         
+
+        ## Add a column for diff between frames, useful for detecting continuations
+        subdf['speaker_frame_diff'] = subdf['speaker_frame'].diff()
+
         
         ## Error check ordering
         # It is not actually guaranteed that the messages arrive in order
