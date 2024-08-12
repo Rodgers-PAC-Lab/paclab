@@ -8,3 +8,4 @@ from . import sleap
 from . import behavior
 from . import neural
 from . import load_gsheet
+from . import syncing
