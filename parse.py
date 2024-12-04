@@ -1474,7 +1474,7 @@ def identify_duplicated_sessions(session_df, quiet=False):
             mouse_date_session_df = mouse_session_df.loc[
                 mouse_session_df['date'] == date]
             
-            txt_to_print = "{} sessions from {} on {}".format(
+            txt_to_print = "{} sessions from {} on {}\n".format(
                 len(mouse_date_session_df),
                 mouse, date)
             

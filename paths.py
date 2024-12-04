@@ -49,7 +49,11 @@ def get_path_to_terminal_data():
     elif computer == 'kelp':
         path_to_terminal_data = (
             '/home/mouse/mnt/cuttlefish/behavior/from_clownfish/autopilot'
-            '/terminal/autopilot/data')   
+            '/terminal/autopilot/data')
+    elif computer == 'shark':
+        path_to_terminal_data = (
+            '/home/mouse/mnt/cuttlefish/behavior/from_clownfish/autopilot'
+            '/terminal/autopilot/data')        
     else:
         path_to_terminal_data = (
             '/home/rowan/mnt/cuttlefish/behavior/from_clownfish/autopilot'
