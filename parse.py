@@ -1709,8 +1709,9 @@ def load_sounds_played(h5_filename, session_start_time):
     # before the session started. Maybe a leftover network packet?
     drop_mask = sounds_played_df['message_time_in_session'] < 0
     if drop_mask.any():
-        print("warning: dropping {} sounds from before session started".format(
-            drop_mask.sum()))
+        # No longer warn about this because it happens almost every time
+        #~ print("warning: dropping {} sounds from before session started".format(
+            #~ drop_mask.sum()))
         sounds_played_df = sounds_played_df[~drop_mask].copy()
     
 
@@ -1739,6 +1740,7 @@ def load_sounds_played(h5_filename, session_start_time):
         ## Deal with wraparound
         # message_frame can wrap around 2**31 to -2**31
         subdf['message_frame'] = subdf['message_frame'].astype(np.int64)
+        subdf['speaker_frame'] = subdf['speaker_frame'].astype(np.int64)
         #int32_info = np.iinfo(np.int32)
         
         # Detect by this huge offset
@@ -1751,6 +1753,10 @@ def load_sounds_played(h5_filename, session_start_time):
             subdf.loc[fix_mask, 'message_frame'] += 2 ** 32
             subdf.loc[fix_mask, 'speaker_frame'] += 2 ** 32
         
+
+        ## Add a column for diff between frames, useful for detecting continuations
+        subdf['speaker_frame_diff'] = subdf['speaker_frame'].diff()
+
         
         ## Error check ordering
         # It is not actually guaranteed that the messages arrive in order
@@ -1844,6 +1850,11 @@ def load_flash_df(h5_filename):
     each pi sent a message on every trial, otherwise this will get messed up.
     As a check for this, we make sure that there's never more than a 200 ms
     difference between the last pi and the first pi on any trial.
+
+    # this plots latency across pis
+    # plot(flash_df_wrt_session_start.sub(flash_df_wrt_session_start['trial_start'], axis=0))
+    # Looks like it takes about about 80 ms to reach rpi01 and 120ms to reach rpi04,
+    # with random spikes in this latency on some trials.
     
     Returns : DataFrame
         index: trial number

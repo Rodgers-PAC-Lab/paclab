@@ -101,8 +101,8 @@ def load_tracked_sleap_data(hdf5_filename):
 def plot_example_frame(
     frame, 
     frame_tracks=None, 
-    xlims='from_octagon', 
-    ylims='from_octagon', 
+    xlims=None, 
+    ylims=None, 
     dpi=100, 
     edge_names=None, 
     octagon_keypoints=None,
@@ -134,30 +134,57 @@ def plot_example_frame(
     """
     # Default edge_names
     if edge_names is None:
-        edge_names = [
-            ['mid_back', 'tail_base'],
-            ['snout', 'mid_ears'],
-            ['mid_ears', 'mid_back'],
-            ['L ear', 'mid_ears'],
-            ['R ear ', 'mid_ears'],
-            ['L ear', 'snout'],
-            ['R ear ', 'snout'],
-            ['L forelimb', 'L thigh'],
-            ['R forelimb', 'R thigh'],
-            ['L thigh', 'tail_base'],
-            ['R thigh', 'tail_base'],
-            ['L forelimb', 'mid_ears'],
-            ['R forelimb', 'mid_ears'],
-            ['L thigh', 'mid_back'],
-            ['R thigh', 'mid_back'],
-            ['R forelimb', 'mid_back'],
-            ['L forelimb', 'mid_back'],
-            ['tail_base', 'tail_1'],
-            ['tail_3', 'tail_end'],
-            ['tail_1', 'tail_mid'],
-            ['tail_mid', 'tail_3'],
-            ]
-    
+        if 'R thigh' in frame_tracks.index:
+            # Old syntax
+            edge_names = [
+                ['mid_back', 'tail_base'],
+                ['snout', 'mid_ears'],
+                ['mid_ears', 'mid_back'],
+                ['L ear', 'mid_ears'],
+                ['R ear ', 'mid_ears'],
+                ['L ear', 'snout'],
+                ['R ear ', 'snout'],
+                ['L forelimb', 'L thigh'],
+                ['R forelimb', 'R thigh'],
+                ['L thigh', 'tail_base'],
+                ['R thigh', 'tail_base'],
+                ['L forelimb', 'mid_ears'],
+                ['R forelimb', 'mid_ears'],
+                ['L thigh', 'mid_back'],
+                ['R thigh', 'mid_back'],
+                ['R forelimb', 'mid_back'],
+                ['L forelimb', 'mid_back'],
+                ['tail_base', 'tail_1'],
+                ['tail_3', 'tail_end'],
+                ['tail_1', 'tail_mid'],
+                ['tail_mid', 'tail_3'],
+                ]
+        else:
+            # New names
+            edge_names = [
+                ['mid_back', 'tail_0'],
+                ['snout', 'mid_ears'],
+                ['mid_ears', 'mid_back'],
+                ['L ear', 'mid_ears'],
+                ['R ear', 'mid_ears'],
+                ['L ear', 'snout'],
+                ['R ear', 'snout'],
+                ['L forelimb', 'L hindlimb'],
+                ['R forelimb', 'R hindlimb'],
+                ['L hindlimb', 'tail_0'],
+                ['R hindlimb', 'tail_0'],
+                ['L forelimb', 'mid_ears'],
+                ['R forelimb', 'mid_ears'],
+                ['L hindlimb', 'mid_back'],
+                ['R hindlimb', 'mid_back'],
+                ['R forelimb', 'mid_back'],
+                ['L forelimb', 'mid_back'],
+                ['tail_0', 'tail_1'],
+                ['tail_3', 'tail_4'],
+                ['tail_1', 'tail_2'],
+                ['tail_2', 'tail_3'],
+                ]            
+        
     # Default lims
     if xlims is None:
         xlims = (0, frame.shape[1])

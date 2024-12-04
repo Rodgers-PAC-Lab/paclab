@@ -4,10 +4,19 @@ import os
 import numpy as np
 import scipy
 import matplotlib.pyplot as plt
+import my
 import my.plot
 
 def load_analog_data(analog_packed_filename):
-    """Check filesize on analog_packed_filename and return memmap"""
+    """Check filesize on analog_packed_filename and return memmap
+    
+    At present:
+    trig_signal = analog_mm[:, 0]
+    trial_start_signal = analog_mm[:, 1]
+    speaker_signal = analog_mm[:, 2]
+    video_sync_signal = analog_mm[:, 3]
+    video_save_signal = analog_mm[:, 4]    
+    """
     # Check size
     analog_packed_file_size_bytes = os.path.getsize(analog_packed_filename)
     analog_packed_file_size_samples = analog_packed_file_size_bytes // 32 // 2
@@ -38,6 +47,50 @@ def load_neural_data(neural_packed_filename):
     
     return neural_mm
 
+def get_video_start_time(video_save_signal, multiple_action='error'):
+    """Return the time (in samples) of the video save pulse
+    
+    The video save signal in Room C is frequently incorrect. It's supposed
+    to be high throughout the recording. Instead, it is frequently pulsed
+    high for just 5 ms or so, sometimes multiple times, or never goes
+    high at all. I don't know if the 5 ms pulse actually maps onto the
+    start of the video or not. This might be because the saving command
+    is only guaranteed for the control camera, or something like that.
+    
+    trig_signal : array-like
+        The trigger signal
+    
+    multiple_action : string or None
+        Controls what happens if multiple triggers detected
+        'error': raise ValueError
+        'warn' or 'warning': print warning
+        anything else : do nothing
+
+    Returns: start_times, durations
+        start_times: start time in  samples
+        durations: duration in samples
+            
+        If multiple triggers are detected, they are all returned in an array
+        If only one, then only that one is returned
+    """
+    # Find threshold crossings
+    # 10.0V = 32768 (I think?), so 3.3V = 10813
+    # Take the first sample that exceeds roughly half that
+    trig_time_a, trig_duration_a = (
+        my.syncing.extract_onsets_and_durations(
+        video_save_signal, delta=5000, verbose=False, maximum_duration=np.inf))
+    
+    if len(trig_time_a) != 1:
+        if multiple_action == 'error':
+            raise ValueError("expected 1 trig, got {}".format(len(trig_time_a)))
+        elif multiple_action in ['warn', 'warning']:
+            print("warning: expected 1 trig, got {}".format(len(trig_time_a)))
+
+    if len(trig_time_a) == 1:
+        return trig_time_a[0], trig_duration_a[0]
+    else:
+        return trig_time_a, trig_duration_a
+
 def get_recording_start_time(trig_signal, multiple_action='error'):
     """Return the time (in samples) of the recording start pulse
     
@@ -55,9 +108,6 @@ def get_recording_start_time(trig_signal, multiple_action='error'):
     If multiple triggers are detected, they are all returned in an array
     If only one, then only that one is returned
     """
-    import MCwatch.behavior
-
-
     # Find threshold crossings
     # 10.0V = 32768 (I think?), so 3.3V = 10813
     # Take the first sample that exceeds roughly half that
@@ -65,7 +115,7 @@ def get_recording_start_time(trig_signal, multiple_action='error'):
     # There is a pulse about 6000 samples long at the very beginning, which I
     # think is when the nosepoke is initialized
     trig_time_a, trig_duration_a = (
-        MCwatch.behavior.syncing.extract_onsets_and_durations(
+        my.syncing.extract_onsets_and_durations(
         trig_signal, delta=5000, verbose=False, maximum_duration=5000))
     
     if len(trig_time_a) != 1:
@@ -88,6 +138,10 @@ def make_plot(
     downsample=1, scaling_factor=6250./32768,
     inter_ch_spacing=234,
     max_data_size=1e7, highpass=False,
+    spike_samples=None,
+    spike_channels=None,
+    spike_colors=None,
+    plot_kwargs={},
     ):
     """Plot a vertical stack of channels in the same ax.
     
@@ -104,8 +158,14 @@ def make_plot(
         Default is (0, len(data))
     
     ch_list : a list of the channels to include, expressed as indices into
-        the columns of `data`. This also determines the order in which they
-        will be plotted (from top to bottom of the figure)
+        the columns of `data`. 
+    
+    ch_labels : list, same length as ch_list
+        Each trace will be labeled
+    
+    ch_ypos : list, same length as ch_list
+        The order they will be plotted in, ie the one with lowest ch_ypos
+        will be plotted at the top
     
     exclude_ch_list : remove these channels from `ch_list`
     
@@ -126,6 +186,13 @@ def make_plot(
         If None, do not filter
     
     plot_kwargs : a dict to pass to `plot`, containing e.g. linewidth
+    
+    spike_samples, spike_channels : array-like
+        If either is None, nothing happens
+        These should be the same length
+        These are the times of spikes (in samples) and the channels of 
+        each spike (expressed as indices into ch_list).
+        They will be overplotted in red. 
     """
     # data range in seconds
     t = np.arange(n_range[0], n_range[1]) / sampling_rate
@@ -172,8 +239,39 @@ def make_plot(
     for ncol, col in enumerate(got_data.T):
         ypos = ch_ypos[ncol]
         y_offset = -inter_ch_spacing * ypos
-        ax.plot(t_ds, col + y_offset, 'k', lw=.75, clip_on=False)
+        ax.plot(t_ds, col + y_offset, 'k', clip_on=False, **plot_kwargs)
 
+    
+    ## Overplot the spikes
+    if spike_samples is not None and spike_channels is not None:
+        # Convert to int
+        spike_channels = spike_channels.astype(int)
+        spike_samples = spike_samples.astype(int)
+        assert len(spike_channels) == len(spike_samples)
+        
+        # Iterate over every spike
+        zobj = zip(spike_samples, spike_channels, spike_colors)
+        for spike_sample, spike_channel, spike_color in zobj:
+            # Get the time of this spike relative to got_data
+            n_spike = (spike_sample - n_range[0]) // downsample
+            n_spike_start = n_spike - (20 // downsample)
+            n_spike_stop = n_spike + (20 // downsample)
+            
+            # Convert to real time
+            t_spike_range = t_ds[n_spike_start:n_spike_stop]
+            
+            # Grab a slice of data
+            y_spike = got_data[n_spike_start:n_spike_stop, spike_channel]
+            
+            # Where to plot it
+            y_offset = -inter_ch_spacing * ch_ypos[spike_channel]
+            
+            # Plot it
+            ax.plot(t_spike_range, y_spike + y_offset, color=spike_color, 
+                lw=1)
+
+
+    ## Pretty
     # title
     ax.set_title('distance between channels = {} uV'.format(inter_ch_spacing))
 
