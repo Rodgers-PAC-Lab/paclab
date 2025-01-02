@@ -6,32 +6,89 @@ import scipy
 import pickle
 import pandas
 import socket
+import matplotlib
+import matplotlib.pyplot as plt
+import my.plot
 
+def clear_all_lines_and_images_from_figure(fig):
+    """Remove all `lines` and `images` from all axes in `fig`"""
+    for ax in fig.axes:
+        clear_all_lines_and_images(ax)
 
-def get_metadata(notes_directory, data_directory, datestring):
+def clear_all_lines_and_images(ax):
+    """Remove all `lines` and `images` from `ax`"""
+    while len(ax.lines) > 0:
+        ax.lines[0].remove()
+
+    while len(ax.images) > 0:
+        ax.images[0].remove()
+
+def move_figure(f, x, y):
+    """Move figure's upper left corner to pixel (x, y)"""
+    backend = matplotlib.get_backend()
+    if backend == 'TkAgg':
+        f.canvas.manager.window.wm_geometry("+%d+%d" % (x, y))
+    elif backend == 'WXAgg':
+        f.canvas.manager.window.SetPosition((x, y))
+    else:
+        # This works for QT and GTK
+        # You can also use window.setGeometry
+        f.canvas.manager.window.move(x, y)
+def rint(arr):
+    """Round with rint and cast to int
+
+    If `arr` contains NaN, casting it to int causes a spuriously negative
+    number, because NaN cannot be an int. In this case we raise ValueError.
+    """
+    if np.any(np.isnan(np.asarray(arr))):
+        raise ValueError("cannot convert arrays containing NaN to int")
+    return np.rint(arr).astype(int)
+def generate_colorbar(n_colors, mapname='jet', rounding=100, start=0.3, stop=1.):
+    """Generate N evenly spaced colors from start to stop in map"""
+    color_idxs = rint(rounding * np.linspace(start, stop, n_colors))[::-1]
+    colors = plt.get_cmap(mapname, rounding)(color_idxs)
+    return colors
+def get_metadata(notes_directory, data_directory, datestring,
+                 metadata_version, day_directory = '_ABR'):
     """Get the metadata from a day of recordings
-    
-    Looks for a file called notes_directory/20{}_ABR/{}_notes.csv
-    where {} is the datestring.
+
+    Looks for the metadata csv file
     Reads this csv file
     Includes only the rows where include is true
     Forms a session_name column
     Forms a datafile column
-    
+
+    Parameters:
+        notes_directory: where the metadata csv
+        data_directory,
+        datestring: yymmdd datestring
+        metadata_verbose: using the verbose format with 2 extra columns for resistor values
+        day_directory: what the directory's name is, defaulting to '{date}_ABR'
     Returns: DataFrame
     """
     # Form the filename to the csv file
-    csv_filename = os.path.join(
-        notes_directory,
-        '20' + datestring + '_ABR', 
-        datestring + '_notes.csv')
-    
+    if metadata_version == "v4":
+        csv_filename = os.path.join(
+            notes_directory,
+            '20' + datestring + day_directory,
+            datestring + '_notes_v4.csv')
+    elif metadata_version == "verbose":
+        csv_filename = os.path.join(
+            notes_directory,
+            '20' + datestring + day_directory,
+            datestring + '_notes_verbose.csv')
+    else:
+        csv_filename = os.path.join(
+            notes_directory,
+            '20' + datestring + day_directory,
+            datestring + '_notes.csv')
+
     # Read the CSV file
     metadata = pandas.read_csv(csv_filename)
+    metadata['include'] = metadata['include'].fillna(1).astype(bool)
 
     # Drop the ones that we don't want to include
-    metadata['include'] = metadata['include'].fillna(1).astype(bool)
-    metadata = metadata.loc[metadata['include'].values]
+    # metadata = metadata.loc[metadata['include'].values]
 
     # Form session name from session number
     metadata['session_name'] = [
@@ -41,7 +98,7 @@ def get_metadata(notes_directory, data_directory, datestring):
     metadata['datafile'] = [
         os.path.join(data_directory, session_name + '.bin')
         for session_name in metadata['session_name']]
-    
+
     return metadata
 
 def parse_header(header):
@@ -75,7 +132,6 @@ def parse_header(header):
     res['gains'] = np.array(struct.unpack('<8i', header[28:60]))
 
     return res
-
 
 def parse_data(data_bytes, number_channels, number_samples):
     """Parse bytes into acquired data
@@ -133,227 +189,136 @@ def parse_data(data_bytes, number_channels, number_samples):
 
     return data
 
-def extract_onsets_from_audio_data(audio_data, audio_threshold,
-                                   abr_start_sample, abr_stop_sample,
-                                   winsize=3):
-    """Extract the stimulus onset time from the audio data
-
-    The audio data is rectified and smoothed with a window of size `winsize`.
-    The times when this smoothed signal crosses `audio_threshold` are
-    identified and returned. Only upward crossings are identified.
-
-    audio_data : 1d array
-
-    audio_threshold : float
-        Values in `audio_data` exceeding this threshold will be taken as
-        a stimulus. This is done on the smoothed data, so for short pulses,
-        smoothed data may be much lower htan original data.
-
-    abr_start_sample, abr_stop_sample: int
-        `abr_start_sample` should typically be negative.
-        Onsets less than `-abr_start_sample` will be discarded.
-        Onsets within `abr_stop_sample` of the end of `audio_data` will
-        be discarded.
-        This allows you to take a window of [abr_start_sample, abr_stop_sample]
-        around each onset without running over the end of `audio_data`.
-
-    winsize: int
-        How many samples to use in smoothing
-
-    Returns : array
-        The onsets of the stimuli, in samples
+def extract_single_ad_and_nrl(data,neural_channel, speaker_channel, audio_drop_threshold, neural_drop_threshold):
     """
-    # Rectify and smooth
-    smoothed_audio_data = pandas.Series(audio_data).abs().rolling(
-        winsize, center=True).mean().fillna(0).values
+    Takes a single dession of parsed data and extracts just the audio and neural channels.
+    Drops munged data that's outside the drop thresholds.
 
-    # Find onsets
-    # It should increase by at least `audio_threshold` over no more than
-    # `diffsize` frames. Then there's a refractory period of `refrac` samples.
-    onsets, durations = extract_onsets_and_durations(
-        smoothed_audio_data,
-        delta=audio_threshold,
-        diffsize=(winsize // 2),
-        refrac=50,
-        verbose=False,
-        maximum_duration=10,
-    )
+    Args:
+        data: output of parse_data()
+        neural_channel: channel of neural data in the binary file
+        speaker_channel: channel of audio data in the binary file
+        audio_drop_threshold: drop outliers/munged if abs(voltage) is above this
+        neural_drop_threshold: drop outliers/munged if abs(voltage) is above this
 
-    # ~ # Find threshold crossings
-    # ~ # Noise level is around .008
-    # ~ # Presently onsets are between 8 and 20 ms apart (1500-3000 samples)
-    # ~ onsets = np.where(
-    # ~ (smoothed_audio_data[:-1] < audio_threshold) &
-    # ~ (smoothed_audio_data[1:] > audio_threshold)
-    # ~ )[0]
+    Returns:
+        audio_data: ndarray of the session's audio voltages in V
+        neural_data: ndarray of the session's neural voltages in uV
 
-    # Drop onsets too close to start or end
-    onsets = onsets[
-        (onsets > -abr_start_sample) &
-        (onsets < len(audio_data) - abr_stop_sample)
-        ]
-
-    return onsets
-def extract_onsets_and_durations(lums, delta=30, diffsize=3, refrac=5,
-                                 verbose=False, maximum_duration=100):
-    """Identify sudden, sustained increments in the signal `lums`.
-
-    Algorithm
-    1.  Take the diff of lums over a period of `diffsize`.
-        In code, this is: lums[diffsize:] - lums[:-diffsize]
-        Note that this means we cannot detect an onset before `diffsize`.
-        Also note that this "smears" sudden onsets, so later we will always
-        take the earliest point.
-    2.  Threshold this signal to identify onsets (indexes above
-        threshold) and offsets (indexes below -threshold). Add `diffsize`
-        to each onset and offset to account for the shift incurred in step 1.
-    3.  Drop consecutive onsets that occur within `refrac` samples of
-        each other. Repeat separately for offsets. This is done with
-        the function `drop_refrac`. Because this is done separately, note
-        that if two increments are separated by a brief return to baseline,
-        the second increment will be completely ignored (not combined with
-        the first one).
-    4.  Convert the onsets and offsets into onsets and durations. This is
-        done with the function `extract duration of onsets2`. This discards
-        any onset without a matching offset.
-    5.  Drop any matched onsets/offsets that exceed maximum_duration
-
-    TODO: consider applying a boxcar of XXX frames first.
-
-    Returns: onsets, durations
-        onsets : array of the onset of each increment, in samples.
-            This will be the first sample that includes the detectable
-            increment, not the sample before it.
-        durations : array of the duration of each increment, in samples
-            Same length as onsets. This is "Pythonic", so if samples 10-12
-            are elevated but 9 and 13 are not, the onset is 10 and the duration
-            is 3.
     """
-    # diff the sig over a period of diffsize
-    diffsig = lums[diffsize:] - lums[:-diffsize]
+    # Extract audio data
+    audio_data = data[:, speaker_channel]
+    neural_data = data[:, neural_channel]
 
-    # Threshold and account for the shift
-    onsets = np.where(diffsig > delta)[0] + diffsize
-    offsets = np.where(diffsig < -delta)[0] + diffsize
-    if verbose:
-        print(onsets)
+    ## Find and drop munged data where voltage is way outside thresholds
+    bad_mask = np.append(
+        np.where(np.abs(audio_data) > audio_drop_threshold)[0],
+        np.where(np.abs(neural_data) > neural_drop_threshold)[0])
+    bad_mask = np.sort(bad_mask)
 
-    # drop refractory onsets, offsets
-    onsets2 = drop_refrac(onsets, refrac)
-    offsets2 = drop_refrac(offsets, refrac)
-    if verbose:
-        print(onsets2)
+    # Drop bad_mask indexes from data
+    # If there are two bad areas in the data, this will drop everything
+    # in between those areas too
+    # TODO: reimplement with my.misc.times_near_times
+    if len(bad_mask) != 0:
+        if bad_mask[-1] >= len(audio_data) + 4:
+            audio_data = audio_data[:bad_mask[0] - 5]
+            neural_data = neural_data[:bad_mask[0] - 5]
+        else:
+            audio_data = np.concatenate((
+                audio_data[:bad_mask[0] - 5], audio_data[bad_mask[-1] + 5:]))
+            neural_data = np.concatenate((
+                neural_data[:bad_mask[0] - 5], neural_data[bad_mask[-1] + 5:]))
 
-    # get durations
-    remaining_onsets, durations = extract_duration_of_onsets2(onsets2, offsets2)
-    if verbose:
-        print(remaining_onsets)
+    ## de-median audio data
+    audio_data = audio_data - np.median(audio_data)
 
-    # apply maximum duration mask
-    if maximum_duration is not None:
-        max_dur_mask = durations <= maximum_duration
-        remaining_onsets = remaining_onsets[max_dur_mask].copy()
-        durations = durations[max_dur_mask].copy()
+    # Convert neural data to microvolts
+    # neural_data_uV = neural_data*1e6
 
-    return remaining_onsets, durations
+    return audio_data,neural_data
+
+def find_extrema(flat_data, pk_threshold, wlen=None, diff_threshold = None, distance = 100, width = None,plateau_size=None):
+    if type(flat_data) == np.ndarray:
+        flat_data = pandas.Series(flat_data)
+    pos_peaks = scipy.signal.find_peaks(
+        flat_data,wlen = wlen,threshold=diff_threshold,
+        height=pk_threshold, distance=distance,
+        width=width, plateau_size=plateau_size)[0]
+    neg_peaks = scipy.signal.find_peaks(
+        -flat_data, wlen = wlen, threshold=diff_threshold,
+        height=pk_threshold, distance=distance,
+        width=width, plateau_size=plateau_size)[0]
+    return pos_peaks,neg_peaks
+def get_peak_ys(peak_xs,original_data):
+    peak_ys = []
+    for x in peak_xs:
+        peak_ys.append(pandas.Series(original_data).iloc[x])
+    return peak_ys
 def drop_refrac(arr, refrac):
     """Drop all values in arr after a refrac from an earlier val"""
     drop_mask = np.zeros_like(arr).astype(bool)
     for idx, val in enumerate(arr):
         drop_mask[(arr < val + refrac) & (arr > val)] = 1
     return arr[~drop_mask]
-def extract_duration_of_onsets2(onsets, offsets):
-    """Extract duration of each onset.
+def get_single_onsets(audio_data,audio_threshold, abr_start_sample = -80, abr_stop_sample = 120):
+    pos_peaks, neg_peaks = find_extrema(audio_data,audio_threshold)
+    # Concatenate pos and neg peaks,
+    #  then drop ringing/overshoot peaks during refractory period
+    onsets = np.sort(np.concatenate([pos_peaks, neg_peaks]))
 
-    Use a "greedy" algorithm. For each onset:
-        * Assign it to the next offset
-        * Drop any intervening onsets
-        * Continue with the next onset
+    # Debugging plot of audio and onsets
+    # onset_ys = get_peak_ys(onsets, audio_data)
+    # plt.plot(audio_data)
+    # plt.plot(onsets, onset_ys, "x")
 
-    Returns: remaining_onsets, durations
-    """
-    onsets3 = []
-    durations = []
+    onsets2 = drop_refrac(onsets, 75)
+    # Get rid of onsets that are too close to the start or end of the session.
+#    if onsets2[0] < 80: onsets2 = onsets2[1:]
+    onsets2 = onsets2[
+        (onsets2 > -abr_start_sample) &
+        (onsets2 < len(audio_data) - abr_stop_sample)
+        ]
+    return onsets2
 
-    if len(onsets) == 0:
-        return np.array([], dtype=int), np.array([], dtype=int)
-
-    # This trigger will be set after each detected duration to mask out
-    # subsequent onsets greedily
-    onset_trigger = np.min(onsets) - 1
-
-    # Iterate over onsets
-    for idx, val in enumerate(onsets):
-        # Skip onsets
-        if val < onset_trigger:
-            continue
-
-        # Find upcoming offsets and skip if none
-        upcoming_offsets = offsets[offsets > val]
-        if len(upcoming_offsets) == 0:
-            continue
-        next_offset = upcoming_offsets[0]
-
-        # Store duration and this onset
-        onsets3.append(val)
-        durations.append(next_offset - val)
-
-        # Save this trigger to skip subsequent onsets greedily
-        onset_trigger = next_offset
-
-    return np.asarray(onsets3), np.asarray(durations)
-
-def parse_by_date(notes_directory, data_directory, datestring,
-    header_size, neural_channel, speaker_channel, audio_threshold, 
-    audio_drop_threshold, neural_drop_threshold, 
-    abr_start_sample, abr_stop_sample,
-    ):
+def get_data_without_onsets(metadata, datestring, header_size, neural_channel, speaker_channel,
+        audio_drop_threshold,neural_drop_threshold, day_directory = "_ABR",
+        has_extra_channel = False, extra_channel = 2):
     """Parses all of the LV binaries from a certain date
+    Removes sections with impossibly high/low values but doesn't extract audio onsets
+    Does de-median the audio data at the end
 
     Arguments
-        notes_directory: path to where notes are
-        data_directory: path to where data is
+        metadata_verbose: T/F, whether or not you're using the verbose format
         datestring: 6 character string for experiment date
         header_size: size of header
         neural_channel: channel of neural data in the binary file
         speaker_channel: channel of audio data in the binary file
-        audio_threshold: numeric
-            stimulus onsets are detected when audio data exceeds this threshold
-        audio_drop_threshold: numeric
-            Drop any trials where abs(audio data) exceeds this threshold
-        neural_drop_threshold: numeric
-            Drop any trials where abs(neural data) exceeds this threshold
-        abr_start_sample, abr_stop_sample: int
-            How much data to take around each onset
-    
-    Returns: big_ad, big_neural, metadata
-        big_ad: DataFrame
-            index: MultiIndex, session * trial
-            columns: timepoint, in ms
-            values: voltage at that time
-        big_neural: DataFrame
-            Matches shape of big_ad, but for neural data
-        metadata: DataFrame
-            Data load from the notes
-            Columns: session, mouse, pre_vs_post, positive_electrode,
-                speaker_side, amplitude, include, notes, session_name, datafile
+    Returns
+        audio_l: list
+            The list is the same length as `metadata`, unless broken files
+            were skipped. Each item in the list is an array of audio data
+            from the corresponding session.
+        neural_l: list
+            Analogous to `audio_data`
+            Each item in this list is the same length as the corresponding
+            item in `audio_data`
+        metadata: dataframe
+            Metadata imported from the csv notes file.
+        sampling_rate: int
+            Samples per second, a setting on the ADS1299. Useful for downstream analysis.
     """
-    ## Load the metadata from that date
-    metadata = get_metadata(notes_directory, data_directory, datestring)
-    
-    
-    ## Load data from all files
-    # Store results here
-    triggered_ad_l = []
-    triggered_neural_l = []
-    keys_l = []
 
-    # Iterate over rows in metadata
+    ## Iterate over rows in metadata
+    audio_l = []
+    neural_l = []
+    extrach_l = []
     for metadata_idx in metadata.index:
-        
+
         ## Get the name of the data file
         datafile = metadata.loc[metadata_idx, 'datafile']
         session_name = metadata.loc[metadata_idx, 'session_name']
+        include = metadata.loc[metadata_idx,'include']
         print("loading {}".format(datafile))
 
         # Skip if it doesn't exist
@@ -370,6 +335,7 @@ def parse_by_date(notes_directory, data_directory, datestring,
         # Skip if nothing
         if len(data_bytes) == 0:
             print("warning: {} is empty".format(datafile))
+            sampling_rate = "skipped"
             continue
 
         # We need to parse the first header separately because it has data that
@@ -385,93 +351,380 @@ def parse_by_date(notes_directory, data_directory, datestring,
         data = parse_data(
             data_bytes,
             first_header_info['number_channels'],
-            first_header_info['number_samples'],
-        )
-        
-        
-        ## Extract the audio onsets
-        # Extract audio data
-        audio_data = data[:, speaker_channel]
+            first_header_info['number_samples'])
+        ## Extract audio and neural data
+        audio_data, neural_data = extract_single_ad_and_nrl(
+            data,neural_channel,speaker_channel,
+            audio_drop_threshold,neural_drop_threshold)
+        if has_extra_channel:
+            extrach_data = data[:, extra_channel]
+        ## Store
+        audio_l.append([session_name,'audio', include, audio_data])
+        neural_l.append([session_name,'neural',include, neural_data])
+        if has_extra_channel:
+            extrach_l.append([session_name, 'extra',include, extrach_data ])
+    if has_extra_channel == False:
+        extrach_l = ['No data']
+    return audio_l, neural_l, extrach_l, sampling_rate
 
-        # de-median it
-        audio_data = audio_data - np.median(audio_data)
+def align_singleday_data(audio_data, neural_data, extrach_data, metadata,
+     audio_threshold, sampling_rate=16000,
+     abr_start_sample=-80, abr_stop_sample = 120,
+     has_extra_channel = False):
+    """Take audio, neural, and metadata from get_data_without_onsets.
 
-        # Extract onsets
-        onsets = extract_onsets_from_audio_data(
-            audio_data, audio_threshold,
-            abr_start_sample, abr_stop_sample)
+    Step 1: Find audio onsets and align data to them
+    Step 2: Distinguish the characteristics of the audio pulse
+        Positive/Negative and Loud/Quiet
+    Step 3: Output a dataframe for each channel (audio and neural)
 
-        # Skip if no onsets detected
-        if len(onsets) == 0:
-            print("warning: {} contains no onsets".format(datafile))
-            continue
+    Args:
+        audio_data: list of ndarrays
+        List of arrays where each array is the raw speaker voltages from
+        a single recording session
 
-        # Extract each trigger from the raw audio
-        # A 0.1 ms click is only a few samples long, but it rings for ~3 ms at 4 kHz
-        # The first ring is 20x smaller than the click, and then it decays
+        neural_data: list of ndarrays
+        List of arrays where each array is the raw speaker voltages from
+        a single recording session
+
+        metadata: pandas.df
+        Dataframe from get_verbose_metadata
+
+        sampling_rate: int
+        ADS1299 sampling rate for that session, should be 16,000 samples/s
+
+    Returns:
+        session_ad: df of a single day's parsed and aligned speaker voltages
+        session_neural:df of a single day's parsed and aligned neural voltages
+
+    """
+    ## Iterate over rows of metadata
+    triggered_ad_l = []
+    triggered_neural_l = []
+    triggered_extrach_l = []
+    keys_l = []
+
+    for metadata_idx in metadata.index:
+        session_name = metadata.loc[metadata_idx, 'session_name']
+
+        onsets, pulse_direction = get_click_info(
+            audio_data, metadata,metadata_idx, audio_threshold, abr_start_sample, abr_stop_sample)
+
+        ## Align audio and neural data around triggers (onsets)
+        # Audio
         triggered_ad = np.array([
-            audio_data[trigger + abr_start_sample:trigger + abr_stop_sample]
+            audio_data[metadata_idx][3][trigger + abr_start_sample:trigger + abr_stop_sample]
             for trigger in onsets])
 
-
-        ## Extract neural data locked to onsets
-        # Extract data
-        neural_data = data[:, neural_channel] * 1e6
-
-        # Extract neural data around triggers
+        # Neural
         triggered_neural = np.array([
-            neural_data[trigger + abr_start_sample:trigger + abr_stop_sample]
+            neural_data[metadata_idx][3][trigger + abr_start_sample:trigger + abr_stop_sample]
             for trigger in onsets])
 
-        
-        ## Define time course in ms
+        #Extra channel
+        if has_extra_channel:
+            triggered_extrach = np.array([
+                extrach_data[metadata_idx][3][trigger + abr_start_sample:trigger + abr_stop_sample]
+                for trigger in onsets])
+        else:
+            triggered_extrach = ["No extra channel"]
+        ## Dataframe the results
+        # Define time course in ms
         t_plot = np.arange(
             abr_start_sample, abr_stop_sample) / sampling_rate * 1000
 
-        
-        ## Dataframe the results
-        triggered_ad_df = pandas.DataFrame(triggered_ad, columns=t_plot)
-        triggered_ad_df.index.name = 'trial'
+        # Create DataFrame with t_plot on the columns, and multi-index
+        # with stimulus info on the rows
+        tad_mindex = pandas.MultiIndex.from_arrays(
+            [pulse_direction, np.arange(0, len(triggered_ad))],
+            names=('ad_pulse_V', 'trial'))
+
+        # Audio
+        triggered_ad_df = pandas.DataFrame(
+            triggered_ad, index=tad_mindex, columns=t_plot)
         triggered_ad_df.columns.name = 'timepoint'
 
-        triggered_neural_df = pandas.DataFrame(triggered_neural, columns=t_plot)
-        triggered_neural_df.index.name = 'trial'
+        # Neural
+        triggered_neural_df = pandas.DataFrame(
+            triggered_neural, index=tad_mindex, columns=t_plot)
         triggered_neural_df.columns.name = 'timepoint'
 
-
-        ## Remove rows with missing packets
-        # Identify rows with missing packets
-        # This is any row where the audio data exceeds audio_drop_threshold
-        # or neural data exceeds neural_drop_threshold
-        bad_audio_mask = (
-            triggered_ad_df.abs() > audio_drop_threshold).any(axis=1)
-        bad_neural_mask = (
-            triggered_neural_df.abs() > neural_drop_threshold).any(axis=1)
-        
-        # The bad_neural_mask is meant to be applied to HP neural data
-        # so it is invalid here
-        bad_mask = bad_audio_mask #| bad_neural_mask
-
-        # Drop from both neural and audio
-        triggered_ad_df = triggered_ad_df.loc[~bad_mask]
-        triggered_neural_df = triggered_neural_df.loc[~bad_mask]
-
+        # Extra channel
+        if has_extra_channel:
+            triggered_extrach_df = pandas.DataFrame(
+                triggered_extrach, index=tad_mindex, columns=t_plot)
+            triggered_extrach_df.columns.name = 'timepoint'
+        else:
+            triggered_extrach_df = ["No extra channel"]
 
         ## Store
         triggered_ad_l.append(triggered_ad_df)
         triggered_neural_l.append(triggered_neural_df)
+        triggered_extrach_l.append(triggered_extrach_df)
         keys_l.append(session_name)
 
-
     ## Concat
-    big_ad = pandas.concat(
+    session_ad = pandas.concat(
         triggered_ad_l, keys=keys_l, names=['session'])
-    big_neural = pandas.concat(
+    session_neural = pandas.concat(
         triggered_neural_l, keys=keys_l, names=['session'])
+    if has_extra_channel:
+        session_extrach = pandas.concat(
+            triggered_extrach_l, keys=keys_l, names=['session'])
+    else:
+        session_extrach = ["No extra channel"]
+    return session_ad, session_neural,session_extrach
+
+def get_click_info(audio_data, metadata, metadata_idx, audio_threshold, abr_start_sample, abr_stop_sample):
+
+    session_name = metadata.loc[metadata_idx, 'session_name']
+
+  # Get onsets
+    onsets = get_single_onsets(
+        audio_data[metadata_idx][3],audio_threshold,abr_start_sample,abr_stop_sample)
+
+    # Debugging plot of audio and onsets
+    # onset_ys = get_peak_ys(onsets, audio_data[metadata_idx][3])
+    # plt.plot(audio_data[metadata_idx][3])
+    # plt.plot(onsets,onset_ys,"x")
+
+    # Detect if the audio pulse was positive or negative V
+    # @RG TODO: replace this block of code with
+    # RG: THIS DOESN'T WORK I don't know why but it doesn't give you the same result
+    # pulse_direction2 = audio_data[metadata_idx][3][onsets] >= 0
+    pulse_direction = []
+    pulse_amplitude=[]
+    for audio_pulse in np.arange(0, len(onsets)):
+        # Determine if the audio pulse was positive or negative V
+        # Average the detected onset's voltage with the surrounding 2 voltages just to make sure
+        # @RG: should not be necessary to average because onsets2 indexes
+        # peak, right?
+        # @CR: Sure it's probably not necessary but it doesn't hurt
+        pulsewindow_avg = audio_data[metadata_idx][3][onsets[audio_pulse] - 1:onsets[audio_pulse] + 2].mean()
+        if pulsewindow_avg >= 0:
+            pulse_direction.append('positive')
+        if pulsewindow_avg < 0:
+            pulse_direction.append('negative')
+    return onsets, pulse_direction
 
 
-    ## Return
-    return big_ad, big_neural, metadata
+def get_click_info_df(audio_data, metadata, audio_threshold, abr_start_sample, abr_stop_sample):
+    click_info_l = []
+    sessions_l = []
+    for metadata_idx in metadata.index:
+        session_name = metadata.loc[metadata_idx, 'session_name']
+
+      # Get onsets
+        onsets = get_single_onsets(
+            audio_data[metadata_idx][3],audio_threshold,abr_start_sample,abr_stop_sample)
+
+        # Debugging plot of audio and onsets
+        # onset_ys = get_peak_ys(onsets, audio_data[metadata_idx][3])
+        # plt.plot(audio_data[metadata_idx][3])
+        # plt.plot(onsets,onset_ys,"x")
+
+        # Detect if the audio pulse was positive or negative V
+        # @RG TODO: replace this block of code with
+        # RG: THIS DOESN'T WORK I don't know why but it doesn't give you the same result
+        # pulse_direction2 = audio_data[metadata_idx][3][onsets] >= 0
+        pulse_direction = []
+        pulse_amplitude=[]
+        for audio_pulse in np.arange(0, len(onsets)):
+            # Determine if the audio pulse was positive or negative V
+            # Average the detected onset's voltage with the surrounding 2 voltages just to make sure
+            # @RG: should not be necessary to average because onsets2 indexes
+            # peak, right?
+            # @CR: Sure it's probably not necessary but it doesn't hurt
+            pulsewindow_avg = audio_data[metadata_idx][3][onsets[audio_pulse] - 1:onsets[audio_pulse] + 2].mean()
+            if pulsewindow_avg >= 0:
+                pulse_direction.append('positive')
+            if pulsewindow_avg < 0:
+                pulse_direction.append('negative')
+        for onset_idx in range(0,len(onsets)):
+            click_info_l.append([session_name,onsets[onset_idx],pulse_direction[onset_idx]])
+    click_info_df = pandas.DataFrame(click_info_l, columns=["session_name", "onset", "pulse_direction"])
+    return click_info_df
+
+
+def join_column_to_index(df1, df2, columns, on=None, reorder_levels=None,
+                         sort=True):
+    """Join df2[columns] onto the index of df1
+
+    df1 : DataFrame to join onto
+    df2 : DataFrame to take columns from
+    columns : string or list of strings
+        Either that column or that list of columns will be taken from df2
+        and joined on df1
+    on : passed to df1.join. If None it will use default
+    reorder_levels : list or None
+        If not None, reorder the levels of the MultiIndex of df1 after joining
+        This must be a complete list of all levels, both the originals and
+        the newly joined
+    sort : bool, default True
+        Whether to sort the result by its new index before returning
+
+    See here:
+    https://stackoverflow.com/questions/14744068/prepend-a-level-to-a-pandas-multiindex/56278736#56278736
+
+    Returns: DataFrame
+        df1 with df2[columns] joined onto it
+    """
+    df1_old = df1.droplevel([2, 3], axis=0)
+    df2_old = df2
+    # Get idx as frame
+    old_idx = df1.index.to_frame()
+    old_idx2= df1_old.index.to_frame()
+
+    # Join
+    # Rename session_name to session so that it matches old_idx
+    to_join = df2.reset_index().drop('original_session_num', axis=1)
+
+    # Reindex by date and session to match old_idx
+    to_join = to_join.set_index(['date', 'session'])
+
+    # Keep only the columns that we want to join
+    to_join = to_join[columns]
+
+    # Join onto old_idx
+    new_idx = old_idx.join(to_join)
+
+    # Convert back to multiindex
+    res = df1.copy()
+    res.index = pandas.MultiIndex.from_frame(new_idx)
+
+    # Reorder levels
+    if reorder_levels is not None:
+        res = res.reorder_levels(reorder_levels)
+
+    # Sort
+    if sort:
+        res = res.sort_index()
+
+    # Return
+    return res
+
+def get_audio_amplitude(big_audio_data,big_neural_data,amplitude_thresholds):
+    return
+
+def single_row_extrema(flat_data,ms_l):
+    # Almost the same as find_extrema, except
+    # it doesn't require a threshold and it keeps the xs and ys seperate
+    if type(flat_data) == np.ndarray:
+        flat_data = pandas.Series(flat_data)
+    find_peaks = scipy.signal.find_peaks(flat_data)[0]
+    peak_xs = []
+    peak_ys = []
+    for i in find_peaks:
+        peak_xs.append(flat_data.index[i])
+        peak_ys.append(flat_data.iloc[i])
+    flat_data_np = np.array(flat_data)
+    find_mins = scipy.signal.argrelmin(flat_data_np)[0]
+    valley_xs = []
+    valley_ys = []
+    for i in find_mins:
+        valley_xs.append(flat_data.index[i])
+        valley_ys.append(flat_data.iloc[i])
+
+    return peak_xs,peak_ys,valley_xs,valley_ys
+def get_peak_coords_df(channel, ch_avgs,ms_l):
+    if channel==1:
+        ch_avgs = ch_avgs.loc['neural']
+        ch_avgs = ch_avgs.groupby(['date', 'mouse','amplitude', 'ch1_config', 'speaker_side']).mean()
+        ch_avgs.index = ch_avgs.index.rename('ch_config',level='ch1_config')
+    if channel == 3:
+        ch_avgs = ch_avgs.loc['extrach']
+        ch_avgs = ch_avgs.groupby(['date', 'mouse','amplitude', 'ch3_config', 'speaker_side']).mean()
+        ch_avgs.index = ch_avgs.index.rename('ch_config',level='ch3_config')
+    ABR_stats = []
+    for ABRidx in np.arange(0, len(ch_avgs)):
+        if ABRidx == len(ch_avgs):
+            singleABR = ch_avgs[ABRidx:]
+        singleABR = ch_avgs[ABRidx:ABRidx + 1]
+
+        pospk_xs, pospk_ys, negpk_xs, negpk_ys = single_row_extrema(singleABR.values[0], ms_l)
+        all_pk_xs = np.concatenate([pospk_xs, negpk_xs])
+        all_pk_ys = get_peak_ys(all_pk_xs, np.array(singleABR)[0])
+
+        pk_direction = []
+        for yval in all_pk_ys:
+            if yval >= 0:
+                pk_direction.append('pospk')
+            elif yval < 0:
+                pk_direction.append('negpk')
+            else:
+                pk_direction.append('ERROR')
+
+        d = {
+            # "info":         singleABR.index,
+            "pk_x": all_pk_xs.astype(int),
+            "pk_y": all_pk_ys,
+            "pk_direction": pk_direction
+        }
+        pk_info = pandas.DataFrame(d)
+        pk_info['speaker_side'] = singleABR.index.get_level_values('speaker_side').values[0]
+        pk_info['amplitude'] = singleABR.index.get_level_values('amplitude').values[0]
+        pk_info['ch_config'] = singleABR.index.get_level_values('ch_config').values[0]
+        pk_info['mouse'] = singleABR.index.get_level_values('mouse').values[0]
+        pk_info['date'] = singleABR.index.get_level_values('date').values[0]
+#        pk_info['data'] = singleABR.index.get_level_values('data').values[0]
+        ABR_stats.append(pk_info)
+    all_pks_df = pandas.concat(ABR_stats).sort_values(['date', 'mouse', 'amplitude', 'ch_config', 'speaker_side', 'pk_x']).reset_index(
+        drop=True)
+    all_pks_df = all_pks_df.set_index(['date', 'mouse', 'amplitude', 'ch_config', 'speaker_side']).sort_index()
+    return all_pks_df
+def get_singleday_peak_coords_df(channel, ch_avgs,ms_l):
+    # Channels called as "special1" or "special3" are to catch a situation where
+    # you recorded vertex-ear on channel 1 instead of channel 3, or LR on ch 3 instead of ch 1
+    if channel == "special1":
+        ch_avgs.index = ch_avgs.index.rename('ch_config',level='ch1_config')
+    if channel == "special3":
+        ch_avgs.index = ch_avgs.index.rename('ch_config', level='ch3_config')
+    if channel==1:
+        ch_avgs = ch_avgs.loc['neural']
+        ch_avgs = ch_avgs.groupby(['mouse','amplitude', 'ch1_config', 'speaker_side']).mean()
+        ch_avgs.index = ch_avgs.index.rename('ch_config',level='ch1_config')
+    if channel == 3:
+        ch_avgs = ch_avgs.loc['extrach']
+        ch_avgs = ch_avgs.groupby(['mouse','amplitude', 'ch3_config', 'speaker_side']).mean()
+        ch_avgs.index = ch_avgs.index.rename('ch_config',level='ch3_config')
+    ABR_stats = []
+    for ABRidx in np.arange(0, len(ch_avgs)):
+        if ABRidx == len(ch_avgs):
+            singleABR = ch_avgs[ABRidx:]
+        singleABR = ch_avgs[ABRidx:ABRidx + 1]
+
+        pospk_xs, pospk_ys, negpk_xs, negpk_ys = single_row_extrema(singleABR.values[0], ms_l)
+        all_pk_xs = np.concatenate([pospk_xs, negpk_xs])
+        all_pk_ys = get_peak_ys(all_pk_xs, np.array(singleABR)[0])
+
+        d = {
+            # "info":         singleABR.index,
+            "pk_x": all_pk_xs.astype(int),
+            "pk_y": all_pk_ys
+        }
+        pk_info = pandas.DataFrame(d)
+        pk_info['speaker_side'] = singleABR.index.get_level_values('speaker_side').values[0]
+        pk_info['amplitude'] = singleABR.index.get_level_values('amplitude').values[0]
+        pk_info['ch_config'] = singleABR.index.get_level_values('ch_config').values[0]
+        pk_info['mouse'] = singleABR.index.get_level_values('mouse').values[0]
+        ABR_stats.append(pk_info)
+    all_pks_df = pandas.concat(ABR_stats).sort_values(['mouse', 'amplitude', 'ch_config', 'speaker_side', 'pk_x']).reset_index(
+        drop=True)
+    all_pks_df = all_pks_df.set_index(['mouse', 'amplitude', 'ch_config', 'speaker_side']).sort_index()
+    return all_pks_df
+
+def get_singleABR_stddevs(ABR_df):
+    # Takes in the full ABR_df of all peaks picked from get_peak_coords_df
+    # Returns the peaks after the sound and their std devs away from the mean
+    # 0 ms is at ms_l[80]
+    baseline_test = ABR_df.loc[ABR_df['pk_x'] <= 80]
+    baseline_mean = baseline_test['pk_y'].mean()
+    base_std = baseline_test['pk_y'].std()
+#    baseline_test.insert(0,'stddevs',(baseline_mean - baseline_test['pk_y']) / base_std)
+#    baseline_test['stddevs'] = (baseline_mean - baseline_test['pk_y']) / base_std
+    ABR_df.insert(2, 'zscore', ((baseline_mean - ABR_df['pk_y']) / base_std))
+    ABR_df.insert(2, 'z_abs', abs(ABR_df['zscore']))
+    return ABR_df,baseline_mean,base_std
 
 def get_ABR_data_paths():
     computer = socket.gethostname()
@@ -486,13 +739,6 @@ def get_ABR_data_paths():
         Metadata_directory = os.path.normpath(os.path.expanduser(
             'C:/Users/mouse/Documents/GitHub/scripts/rowan/ABR_data'))
         Pickle_directory = os.path.normpath(os.path.expanduser('~/Pickle Temporary Storage'))
-    elif computer == 'Athena':
-        # Rowan's old laptop
-        LV_directory = 'None-- work from pickles'
-        Metadata_directory = os.path.normpath(os.path.expanduser
-            ('C:/Users/kgarg/Documents/GitHub/scripts/rowan/ABR_data'))
-        Pickle_directory = os.path.normpath(os.path.expanduser(
-            'C:/Users/kgarg/Documents/Career/PAC Lab Stuff/ABR/Figs_Pickles/Concatted Pickles'))
     elif computer == 'NSY-0183-PC':
         # Rowan's new laptop
         LV_directory = 'None-- work from pickles'
@@ -505,5 +751,3 @@ def get_ABR_data_paths():
         Pickle_directory = os.path.expanduser('~/mnt/cuttlefish/rowan/ABR/Figs_Pickles')
         Metadata_directory = os.path.expanduser('~/dev/scripts/rowan/ABR_data')
     return LV_directory,Metadata_directory,Pickle_directory
-
-
