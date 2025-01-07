@@ -291,7 +291,7 @@ def get_single_onsets(audio_data,audio_threshold, abr_start_sample = -80, abr_st
     # plt.plot(audio_data)
     # plt.plot(onsets, onset_ys, "x")
 
-    onsets2 = drop_refrac(onsets, 75)
+    onsets2 = drop_refrac(onsets, 750)
     # Get rid of onsets that are too close to the start or end of the session.
 #    if onsets2[0] < 80: onsets2 = onsets2[1:]
     onsets2 = onsets2[
