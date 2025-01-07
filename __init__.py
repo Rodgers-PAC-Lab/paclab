@@ -3,6 +3,10 @@
 # Then the user can type paclab.paths.get_path_to_terminal_data()
 
 from . import paths
-#from . import parse
-#from . import sleap
+from . import parse
+from . import sleap
 from . import behavior
+from . import neural
+from . import load_gsheet
+from . import syncing
+
