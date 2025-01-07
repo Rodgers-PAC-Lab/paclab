@@ -66,22 +66,41 @@ def get_metadata(notes_directory, data_directory, datestring,
         day_directory: what the directory's name is, defaulting to '{date}_ABR'
     Returns: DataFrame
     """
-    # Form the filename to the csv file
-    if metadata_version == "v4":
-        csv_filename = os.path.join(
-            notes_directory,
-            '20' + datestring + day_directory,
-            datestring + '_notes_v4.csv')
-    elif metadata_version == "verbose":
-        csv_filename = os.path.join(
-            notes_directory,
-            '20' + datestring + day_directory,
-            datestring + '_notes_verbose.csv')
-    else:
-        csv_filename = os.path.join(
-            notes_directory,
-            '20' + datestring + day_directory,
-            datestring + '_notes.csv')
+    # Rowan started organizing ABR_data by year and right now the only year that isn't in its own subfolder is 2024
+    if datestring[0:2] != '24':
+        notes_directory = os.path.join(notes_directory, '20' + datestring[0:2])
+
+    # Rowan also changed their naming convention for folder names from '20yymmdd' to just 'yymmdd'
+    if datestring[0:2] != '25':
+        # Form the filename to the csv file
+        if metadata_version == "v4":
+            csv_filename = os.path.join(
+                notes_directory,
+                '20' + datestring + day_directory,
+                datestring + '_notes_v4.csv')
+        elif metadata_version == "verbose":
+            csv_filename = os.path.join(
+                notes_directory,
+                '20' + datestring + day_directory,
+                datestring + '_notes_verbose.csv')
+        else:
+            csv_filename = os.path.join(
+                notes_directory,
+                '20' + datestring + day_directory,
+                datestring + '_notes.csv')
+    # There's no reason for a 2025 recording to have the legacy notes_verbose format so skip that
+    elif datestring[0:2] == '25':
+        # Form the filename to the csv file
+        if metadata_version == "v4":
+            csv_filename = os.path.join(
+                notes_directory,
+                datestring + day_directory,
+                datestring + '_notes_v4.csv')
+        else:
+            csv_filename = os.path.join(
+                notes_directory,
+                datestring + day_directory,
+                datestring + '_notes.csv')
 
     # Read the CSV file
     metadata = pandas.read_csv(csv_filename)
@@ -238,7 +257,7 @@ def extract_single_ad_and_nrl(data,neural_channel, speaker_channel, audio_drop_t
 
     return audio_data,neural_data
 
-def find_extrema(flat_data, pk_threshold, wlen=None, diff_threshold = None, distance = 100, width = None,plateau_size=None):
+def find_extrema(flat_data, pk_threshold, wlen=None, diff_threshold = None, distance = 200, width = None,plateau_size=None):
     if type(flat_data) == np.ndarray:
         flat_data = pandas.Series(flat_data)
     pos_peaks = scipy.signal.find_peaks(
@@ -261,8 +280,8 @@ def drop_refrac(arr, refrac):
     for idx, val in enumerate(arr):
         drop_mask[(arr < val + refrac) & (arr > val)] = 1
     return arr[~drop_mask]
-def get_single_onsets(audio_data,audio_threshold, abr_start_sample = -80, abr_stop_sample = 120):
-    pos_peaks, neg_peaks = find_extrema(audio_data,audio_threshold)
+def get_single_onsets(audio_data,audio_threshold, abr_start_sample = -80, abr_stop_sample = 120,distance=200):
+    pos_peaks, neg_peaks = find_extrema(audio_data,audio_threshold,distance=distance)
     # Concatenate pos and neg peaks,
     #  then drop ringing/overshoot peaks during refractory period
     onsets = np.sort(np.concatenate([pos_peaks, neg_peaks]))
@@ -370,7 +389,7 @@ def get_data_without_onsets(metadata, datestring, header_size, neural_channel, s
 def align_singleday_data(audio_data, neural_data, extrach_data, metadata,
      audio_threshold, sampling_rate=16000,
      abr_start_sample=-80, abr_stop_sample = 120,
-     has_extra_channel = False):
+     has_extra_channel = False, distance = 200):
     """Take audio, neural, and metadata from get_data_without_onsets.
 
     Step 1: Find audio onsets and align data to them
@@ -408,7 +427,7 @@ def align_singleday_data(audio_data, neural_data, extrach_data, metadata,
         session_name = metadata.loc[metadata_idx, 'session_name']
 
         onsets, pulse_direction = get_click_info(
-            audio_data, metadata,metadata_idx, audio_threshold, abr_start_sample, abr_stop_sample)
+            audio_data, metadata,metadata_idx, audio_threshold, abr_start_sample, abr_stop_sample,distance=distance)
 
         ## Align audio and neural data around triggers (onsets)
         # Audio
@@ -475,7 +494,7 @@ def align_singleday_data(audio_data, neural_data, extrach_data, metadata,
         session_extrach = ["No extra channel"]
     return session_ad, session_neural,session_extrach
 
-def get_click_info(audio_data, metadata, metadata_idx, audio_threshold, abr_start_sample, abr_stop_sample):
+def get_click_info(audio_data, metadata, metadata_idx, audio_threshold, abr_start_sample, abr_stop_sample,distance=200):
 
     session_name = metadata.loc[metadata_idx, 'session_name']
 
