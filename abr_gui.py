@@ -9,6 +9,7 @@ import socket
 import matplotlib
 import matplotlib.pyplot as plt
 import my.plot
+import json
 
 def clear_all_lines_and_images_from_figure(fig):
     """Remove all `lines` and `images` from all axes in `fig`"""
@@ -66,30 +67,10 @@ def get_metadata(notes_directory, data_directory, datestring,
         day_directory: what the directory's name is, defaulting to '{date}_ABR'
     Returns: DataFrame
     """
-    # Rowan started organizing ABR_data by year and right now the only year that isn't in its own subfolder is 2024
-    if datestring[0:2] != '24':
-        notes_directory = os.path.join(notes_directory, '20' + datestring[0:2])
+    # Inside the 'scripts' repo, go into the year's subfolder
+    notes_directory = os.path.join(notes_directory, '20' + datestring[0:2])
 
-    # Rowan also changed their naming convention for folder names from '20yymmdd' to just 'yymmdd'
-    if datestring[0:2] != '25':
-        # Form the filename to the csv file
-        if metadata_version == "v4":
-            csv_filename = os.path.join(
-                notes_directory,
-                '20' + datestring + day_directory,
-                datestring + '_notes_v4.csv')
-        elif metadata_version == "verbose":
-            csv_filename = os.path.join(
-                notes_directory,
-                '20' + datestring + day_directory,
-                datestring + '_notes_verbose.csv')
-        else:
-            csv_filename = os.path.join(
-                notes_directory,
-                '20' + datestring + day_directory,
-                datestring + '_notes.csv')
-    # There's no reason for a 2025 recording to have the legacy notes_verbose format so skip that
-    elif datestring[0:2] == '25':
+    if datestring[0:2] == '25':
         # Form the filename to the csv file
         if metadata_version == "v4":
             csv_filename = os.path.join(
@@ -297,7 +278,124 @@ def get_single_onsets(audio_data,audio_threshold, abr_start_sample = -80, abr_st
         ]
     return onsets2
 
-def get_data_without_onsets(metadata, datestring, header_size, neural_channel, speaker_channel,
+def get_data_without_onsets(metadata, neural_channel, speaker_channel,
+        audio_drop_threshold,neural_drop_threshold,
+        data_directory, day_directory = "_ABR",
+        has_extra_channel = False, extra_channel = 2):
+    """Parses all of the LV binaries from a certain date
+    Removes sections with impossibly high/low values but doesn't extract audio onsets
+    Does de-median the audio data at the end
+
+    Arguments
+        metadata: str, what format/version of metadata you're using
+        neural_channel: channel of neural data in the binary file
+        speaker_channel: channel of audio data in the binary file
+        audio_drop_threshold:
+        neural_drop_threshold:
+        config_file: str, filepath for json with config info from the 'U' setup command
+        header_file: str, filepath for csv with all packet headers
+        day_directory: str, suffix for the day's directory in 'scripts' repo
+        has_extra_channel: T/F, are you using more than just the first channel
+        extra_channel: int, which other channel you're recording from (zero-indexed)
+    Returns
+        audio_l: list
+            The list is the same length as `metadata`, unless broken files
+            were skipped. Each item in the list is an array of audio data
+            from the corresponding session.
+        neural_l: list
+            Analogous to `audio_data`
+            Each item in this list is the same length as the corresponding
+            item in `audio_data`
+        metadata: dataframe
+            Metadata imported from the csv notes file.
+        sampling_rate: int
+            Samples per second, a setting on the ADS1299. Useful for downstream analysis.
+    """
+
+    ## Iterate over rows in metadata
+    audio_l = []
+    neural_l = []
+    extrach_l = []
+    for metadata_idx in metadata.index:
+
+        ## Get the name of the data file
+        datafile = metadata.loc[metadata_idx, 'datafile']
+        session_name = metadata.loc[metadata_idx, 'session_name']
+        include = metadata.loc[metadata_idx,'include']
+        print("loading {}".format(datafile))
+
+        # Skip if it doesn't exist
+        if not os.path.exists(datafile):
+            print("warning: {} does not exist".format(datafile))
+            continue
+
+        config_file = os.path.join(data_directory, session_name,'config.json')
+        header_file = os.path.join(data_directory, session_name, 'packet_headers.csv')
+        ## Open the file
+        # Load config
+        with open(config_file) as fi:
+            config = json.load(fi)
+
+        # Parse params we need from config
+        gains = np.array(config['gains'])
+        n_channels = len(gains)
+        sampling_rate = config['sampling_rate']
+        full_range_uV = config['pos_fullscale'] - config['neg_fullscale']
+
+        # Load headers
+        header_df = pandas.read_table(header_file, sep=',')
+
+        # Extract packet number and unwrap it
+        packet_number = np.unwrap(header_df['packet_num'], period=256)
+
+        # Assert no tearing
+        assert (np.diff(packet_number) == 1).all()
+
+        # Load raw data
+        data = np.fromfile(datafile, dtype=int).reshape(-1, n_channels)
+
+        # Rescale - the full range is used by the bit_depth
+        data = data * full_range_uV / 2 ** 24
+
+        # Account for gain that was applied by ADS1299
+        # data will then be in true uV
+        # noise floor appears to have stdev .04uV on neural channel and
+        # 0.2uV on speaker channel
+        data = data / np.array(config['gains'])
+
+        # Read the data
+        # with open(datafile, "rb") as fi:
+        #     data_bytes = fi.read()
+        #
+        # # Skip if nothing
+        # if len(data_bytes) == 0:
+        #     print("warning: {} is empty".format(datafile))
+        #     sampling_rate = "skipped"
+        #     continue
+
+
+
+        ## Parse the entire file
+        # data = parse_data(
+        #     data_bytes,
+        #     first_header_info['number_channels'],
+        #     first_header_info['number_samples'])
+        ## Extract audio and neural data
+        audio_data, neural_data = extract_single_ad_and_nrl(
+            data,neural_channel,speaker_channel,
+            audio_drop_threshold,neural_drop_threshold)
+        if has_extra_channel:
+            extrach_data = data[:, extra_channel]
+        ## Store
+        audio_l.append([session_name,'audio', include, audio_data])
+        neural_l.append([session_name,'neural',include, neural_data])
+        if has_extra_channel:
+            extrach_l.append([session_name, 'extra',include, extrach_data ])
+    if has_extra_channel == False:
+        extrach_l = ['No data']
+    return audio_l, neural_l, extrach_l, sampling_rate
+
+def get_data_without_onsets_legacy(metadata, datestring, header_size, neural_channel, speaker_channel,
         audio_drop_threshold,neural_drop_threshold, day_directory = "_ABR",
         has_extra_channel = False, extra_channel = 2):
     """Parses all of the LV binaries from a certain date
@@ -757,13 +855,15 @@ def get_ABR_data_paths():
         Pickle_directory = os.path.normpath(os.path.expanduser('~/Pickle Temporary Storage'))
     elif computer == 'NSY-0183-PC':
         # Rowan's new laptop
-        LV_directory = 'None-- work from pickles'
+        LV_directory = os.path.normpath(os.path.expanduser(
+            'C:/Users/kgargiu/Documents/GitHub/pickles'))
         Metadata_directory = os.path.normpath(os.path.expanduser
             ('C:/Users/kgargiu/Documents/GitHub/scripts/rowan/ABR_data'))
         Pickle_directory = os.path.normpath(os.path.expanduser(
             'C:/Users/kgargiu/Documents/GitHub/pickles'))
     elif computer=='Theseus':
-        LV_directory = 'None-- work from pickles'
+        LV_directory = os.path.normpath(os.path.expanduser(
+            'C:/Users/kgarg/Documents/GitHub/pickles'))
         Metadata_directory = os.path.normpath(os.path.expanduser
             ('C:/Users/kgarg/Documents/GitHub/scripts/rowan/ABR_data'))
         Pickle_directory = os.path.normpath(os.path.expanduser(
