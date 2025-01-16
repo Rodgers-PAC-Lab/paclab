@@ -292,8 +292,6 @@ def get_data_without_onsets(metadata, neural_channel, speaker_channel,
         speaker_channel: channel of audio data in the binary file
         audio_drop_threshold:
         neural_drop_threshold:
-        config_file: str, filepath for json with config info from the 'U' setup command
-        header_file: str, filepath for csv with all packet headers
         day_directory: str, suffix for the day's directory in 'scripts' repo
         has_extra_channel: T/F, are you using more than just the first channel
         extra_channel: int, which other channel you're recording from (zero-indexed)
@@ -340,7 +338,8 @@ def get_data_without_onsets(metadata, neural_channel, speaker_channel,
         gains = np.array(config['gains'])
         n_channels = len(gains)
         sampling_rate = config['sampling_rate']
-        full_range_uV = config['pos_fullscale'] - config['neg_fullscale']
+        full_range_mV = config['pos_fullscale'] - config['neg_fullscale']
+        full_range_V = full_range_mV/1000
 
         # Load headers
         header_df = pandas.read_table(header_file, sep=',')
@@ -355,7 +354,7 @@ def get_data_without_onsets(metadata, neural_channel, speaker_channel,
         data = np.fromfile(datafile, dtype=int).reshape(-1, n_channels)
 
         # Rescale - the full range is used by the bit_depth
-        data = data * full_range_uV / 2 ** 24
+        data = data * full_range_V / 2 ** 24
 
         # Account for gain that was applied by ADS1299
         # data will then be in true uV
@@ -395,91 +394,91 @@ def get_data_without_onsets(metadata, neural_channel, speaker_channel,
         extrach_l = ['No data']
     return audio_l, neural_l, extrach_l, sampling_rate
 
-def get_data_without_onsets_legacy(metadata, datestring, header_size, neural_channel, speaker_channel,
-        audio_drop_threshold,neural_drop_threshold, day_directory = "_ABR",
-        has_extra_channel = False, extra_channel = 2):
-    """Parses all of the LV binaries from a certain date
-    Removes sections with impossibly high/low values but doesn't extract audio onsets
-    Does de-median the audio data at the end
-
-    Arguments
-        metadata_verbose: T/F, whether or not you're using the verbose format
-        datestring: 6 character string for experiment date
-        header_size: size of header
-        neural_channel: channel of neural data in the binary file
-        speaker_channel: channel of audio data in the binary file
-    Returns
-        audio_l: list
-            The list is the same length as `metadata`, unless broken files
-            were skipped. Each item in the list is an array of audio data
-            from the corresponding session.
-        neural_l: list
-            Analogous to `audio_data`
-            Each item in this list is the same length as the corresponding
-            item in `audio_data`
-        metadata: dataframe
-            Metadata imported from the csv notes file.
-        sampling_rate: int
-            Samples per second, a setting on the ADS1299. Useful for downstream analysis.
-    """
-
-    ## Iterate over rows in metadata
-    audio_l = []
-    neural_l = []
-    extrach_l = []
-    for metadata_idx in metadata.index:
-
-        ## Get the name of the data file
-        datafile = metadata.loc[metadata_idx, 'datafile']
-        session_name = metadata.loc[metadata_idx, 'session_name']
-        include = metadata.loc[metadata_idx,'include']
-        print("loading {}".format(datafile))
-
-        # Skip if it doesn't exist
-        if not os.path.exists(datafile):
-            print("warning: {} does not exist".format(datafile))
-            continue
-
-
-        ## Open the file and read the header
-        # Read the data
-        with open(datafile, "rb") as fi:
-            data_bytes = fi.read()
-
-        # Skip if nothing
-        if len(data_bytes) == 0:
-            print("warning: {} is empty".format(datafile))
-            sampling_rate = "skipped"
-            continue
-
-        # We need to parse the first header separately because it has data that
-        # we need to parse the rest of the packets.
-        first_header_bytes = data_bytes[:header_size]
-        first_header_info = parse_header(first_header_bytes)
-
-        # We use this a lot so extract from the dict
-        sampling_rate = first_header_info['sampling_sps']
-
-
-        ## Parse the entire file
-        data = parse_data(
-            data_bytes,
-            first_header_info['number_channels'],
-            first_header_info['number_samples'])
-        ## Extract audio and neural data
-        audio_data, neural_data = extract_single_ad_and_nrl(
-            data,neural_channel,speaker_channel,
-            audio_drop_threshold,neural_drop_threshold)
-        if has_extra_channel:
-            extrach_data = data[:, extra_channel]
-        ## Store
-        audio_l.append([session_name,'audio', include, audio_data])
-        neural_l.append([session_name,'neural',include, neural_data])
-        if has_extra_channel:
-            extrach_l.append([session_name, 'extra',include, extrach_data ])
-    if has_extra_channel == False:
-        extrach_l = ['No data']
-    return audio_l, neural_l, extrach_l, sampling_rate
+# def get_data_without_onsets_legacy(metadata, datestring, header_size, neural_channel, speaker_channel,
+#         audio_drop_threshold,neural_drop_threshold, day_directory = "_ABR",
+#         has_extra_channel = False, extra_channel = 2):
+#     """Parses all of the LV binaries from a certain date
+#     Removes sections with impossibly high/low values but doesn't extract audio onsets
+#     Does de-median the audio data at the end
+#
+#     Arguments
+#         metadata_verbose: T/F, whether or not you're using the verbose format
+#         datestring: 6 character string for experiment date
+#         header_size: size of header
+#         neural_channel: channel of neural data in the binary file
+#         speaker_channel: channel of audio data in the binary file
+#     Returns
+#         audio_l: list
+#             The list is the same length as `metadata`, unless broken files
+#             were skipped. Each item in the list is an array of audio data
+#             from the corresponding session.
+#         neural_l: list
+#             Analogous to `audio_data`
+#             Each item in this list is the same length as the corresponding
+#             item in `audio_data`
+#         metadata: dataframe
+#             Metadata imported from the csv notes file.
+#         sampling_rate: int
+#             Samples per second, a setting on the ADS1299. Useful for downstream analysis.
+#     """
+#
+#     ## Iterate over rows in metadata
+#     audio_l = []
+#     neural_l = []
+#     extrach_l = []
+#     for metadata_idx in metadata.index:
+#
+#         ## Get the name of the data file
+#         datafile = metadata.loc[metadata_idx, 'datafile']
+#         session_name = metadata.loc[metadata_idx, 'session_name']
+#         include = metadata.loc[metadata_idx,'include']
+#         print("loading {}".format(datafile))
+#
+#         # Skip if it doesn't exist
+#         if not os.path.exists(datafile):
+#             print("warning: {} does not exist".format(datafile))
+#             continue
+#
+#
+#         ## Open the file and read the header
+#         # Read the data
+#         with open(datafile, "rb") as fi:
+#             data_bytes = fi.read()
+#
+#         # Skip if nothing
+#         if len(data_bytes) == 0:
+#             print("warning: {} is empty".format(datafile))
+#             sampling_rate = "skipped"
+#             continue
+#
+#         # We need to parse the first header separately because it has data that
+#         # we need to parse the rest of the packets.
+#         first_header_bytes = data_bytes[:header_size]
+#         first_header_info = parse_header(first_header_bytes)
+#
+#         # We use this a lot so extract from the dict
+#         sampling_rate = first_header_info['sampling_sps']
+#
+#
+#         ## Parse the entire file
+#         data = parse_data(
+#             data_bytes,
+#             first_header_info['number_channels'],
+#             first_header_info['number_samples'])
+#         ## Extract audio and neural data
+#         audio_data, neural_data = extract_single_ad_and_nrl(
+#             data,neural_channel,speaker_channel,
+#             audio_drop_threshold,neural_drop_threshold)
+#         if has_extra_channel:
+#             extrach_data = data[:, extra_channel]
+#         ## Store
+#         audio_l.append([session_name,'audio', include, audio_data])
+#         neural_l.append([session_name,'neural',include, neural_data])
+#         if has_extra_channel:
+#             extrach_l.append([session_name, 'extra',include, extrach_data ])
+#     if has_extra_channel == False:
+#         extrach_l = ['No data']
+#     return audio_l, neural_l, extrach_l, sampling_rate
 
 def align_singleday_data(audio_data, neural_data, extrach_data, metadata,
      audio_threshold, sampling_rate=16000,
