@@ -652,12 +652,20 @@ def get_ABR_data_paths():
     computer = socket.gethostname()
     if computer == 'squid':
         # Rowan's lab desktop
-        LV_directory = os.path.expanduser('~/mnt/cuttlefish/abr/LVdata')
+        LV_directory = os.path.normpath(os.path.expanduser(
+            '~/mnt/cuttlefish/surgery/abr_data'))
         Pickle_directory = os.path.expanduser('~/mnt/cuttlefish/rowan/ABR/Figs_Pickles')
         Metadata_directory = os.path.expanduser('~/scripts/scripts/rowan/ABR_data')
     elif computer == 'DESKTOP-BIEUSUU':
-        # The surgery computer
+        # The surgery computer- windows partition
         LV_directory = os.path.normpath(os.path.expanduser('~/LVdata'))
+        Metadata_directory = os.path.normpath(os.path.expanduser(
+            'C:/Users/mouse/Documents/GitHub/scripts/rowan/ABR_data'))
+        Pickle_directory = os.path.normpath(os.path.expanduser('~/Pickle Temporary Storage'))
+    elif computer == 'mantaray':
+        # The surgery computer- windows partition
+        LV_directory = os.path.normpath(os.path.expanduser(
+            '~/mnt/cuttlefish/surgery/abr_data'))
         Metadata_directory = os.path.normpath(os.path.expanduser(
             'C:/Users/mouse/Documents/GitHub/scripts/rowan/ABR_data'))
         Pickle_directory = os.path.normpath(os.path.expanduser('~/Pickle Temporary Storage'))
