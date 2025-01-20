@@ -9,6 +9,7 @@ import socket
 import matplotlib
 import matplotlib.pyplot as plt
 import my.plot
+import json
 
 def clear_all_lines_and_images_from_figure(fig):
     """Remove all `lines` and `images` from all axes in `fig`"""
@@ -66,30 +67,10 @@ def get_metadata(notes_directory, data_directory, datestring,
         day_directory: what the directory's name is, defaulting to '{date}_ABR'
     Returns: DataFrame
     """
-    # Rowan started organizing ABR_data by year and right now the only year that isn't in its own subfolder is 2024
-    if datestring[0:2] != '24':
-        notes_directory = os.path.join(notes_directory, '20' + datestring[0:2])
+    # Inside the 'scripts' repo, go into the year's subfolder
+    notes_directory = os.path.join(notes_directory, '20' + datestring[0:2])
 
-    # Rowan also changed their naming convention for folder names from '20yymmdd' to just 'yymmdd'
-    if datestring[0:2] != '25':
-        # Form the filename to the csv file
-        if metadata_version == "v4":
-            csv_filename = os.path.join(
-                notes_directory,
-                '20' + datestring + day_directory,
-                datestring + '_notes_v4.csv')
-        elif metadata_version == "verbose":
-            csv_filename = os.path.join(
-                notes_directory,
-                '20' + datestring + day_directory,
-                datestring + '_notes_verbose.csv')
-        else:
-            csv_filename = os.path.join(
-                notes_directory,
-                '20' + datestring + day_directory,
-                datestring + '_notes.csv')
-    # There's no reason for a 2025 recording to have the legacy notes_verbose format so skip that
-    elif datestring[0:2] == '25':
+    if datestring[0:2] == '25':
         # Form the filename to the csv file
         if metadata_version == "v4":
             csv_filename = os.path.join(
@@ -110,103 +91,12 @@ def get_metadata(notes_directory, data_directory, datestring,
     # metadata = metadata.loc[metadata['include'].values]
 
     # Form session name from session number
-    metadata['session_name'] = [
-        'BG-{:04d}'.format(n) for n in metadata['session'].values]
-
+    metadata['session_name'] = ['{:03d}'.format(n) for n in metadata['session'].values]
     # Form the full path to the session
     metadata['datafile'] = [
-        os.path.join(data_directory, session_name + '.bin')
+        os.path.join(data_directory, session_name, 'data.bin')
         for session_name in metadata['session_name']]
-
     return metadata
-
-def parse_header(header):
-    """Parse data from a single header
-
-    `header`: 60 bytes
-
-    Returns: dict, with the following items:
-        packet_number : number of packet within the file
-        number_channels : typically 8
-        number_samples : this is the number of samples per packet
-        trigger_position : whether a trigger occurred in this packet
-            -1 if no trigger
-            Otherwise, an index into the packet
-        header_ver : typically 2
-        total_pkts : total number of packets in the file
-            This is only valid if it's the first header and if Labview
-            completed the recording. Otherwise it's zero.
-        sampling_sps : sampling rate
-        gains : an array of channel gains
-    """
-    res = {}
-
-    res['packet_number'] = struct.unpack('<I', header[0:4])[0]
-    res['number_channels'] = struct.unpack('<I', header[4:8])[0]
-    res['number_samples'] = struct.unpack('<I', header[8:12])[0]
-    res['trigger_position'] = struct.unpack('<i', header[12:16])[0]
-    res['header_ver'] = struct.unpack('<i', header[16:20])[0]
-    res['total_pkts'] = struct.unpack('<I', header[20:24])[0]
-    res['sampling_sps'] = struct.unpack('<i', header[24:28])[0]
-    res['gains'] = np.array(struct.unpack('<8i', header[28:60]))
-
-    return res
-
-def parse_data(data_bytes, number_channels, number_samples):
-    """Parse bytes into acquired data
-
-    Takes the `data_bytes` that have been read from disk, removes all
-    the header information, converts to float, concatenates across packets,
-    and returns.
-
-    data_bytes : bytes
-        This is the data read from disk
-
-    Returns: array of shape (n_samples, n_channels)
-        This is all the data from each channel.
-    """
-    # Each packet comprises a 60 byte headers (15 ints) and a 16000 byte data
-    # payload (4000 floats)
-
-    # It's easiest to convert everything to float, and then just dump the
-    # floats that correspond to the headers
-
-    # Unpack it all to floats
-    n_floats = len(data_bytes) // 4
-
-    # The old, slow way
-    # data = np.array(struct.unpack('<{}f'.format(n_floats), data_bytes))
-
-    # This is faster
-    # https://stackoverflow.com/questions/36797088/speed-up-pythons-struct-unpack
-    data = np.ndarray(
-        (n_floats,), dtype=np.float32, buffer=data_bytes).astype(float)
-
-    # Truncate to a multiple of 4015
-    total_packet_size = 15 + number_channels * number_samples
-    n_complete_packets = len(data) // total_packet_size
-    if len(data) / total_packet_size != n_complete_packets:
-        print("warning: data length was not a multiple of packet length")
-        data = data[:total_packet_size * n_complete_packets]
-
-    # Reshape into packets -- one packet (4015 bytes) per row
-    data = data.reshape(-1, total_packet_size)
-
-    # Drop the first 15 bytes of each row, which are the headers
-    # TODO: instead of dropping, convert to ints, and extract header
-    # of each packet
-    data = data[:, 15:]
-
-    # Each row needs to be reshaped into (number_channels, number_samples)
-    # Note that the data is structured as sample-first;channel-second
-    # which doesn't really make sense
-    data = data.reshape((-1, number_channels, number_samples))
-
-    # Concatenate all packets together (axis=1 accounts for the sample-first
-    # problem). Transpose so each channel is a column
-    data = np.concatenate(data, axis=1).T
-
-    return data
 
 def extract_single_ad_and_nrl(data,neural_channel, speaker_channel, audio_drop_threshold, neural_drop_threshold):
     """
@@ -300,19 +190,23 @@ def get_single_onsets(audio_data,audio_threshold, abr_start_sample = -80, abr_st
         ]
     return onsets2
 
-def get_data_without_onsets(metadata, datestring, header_size, neural_channel, speaker_channel,
-        audio_drop_threshold,neural_drop_threshold, day_directory = "_ABR",
+def get_data_without_onsets(metadata, neural_channel, speaker_channel,
+        audio_drop_threshold,neural_drop_threshold,
+        data_directory, day_directory = "_ABR",
         has_extra_channel = False, extra_channel = 2):
     """Parses all of the LV binaries from a certain date
     Removes sections with impossibly high/low values but doesn't extract audio onsets
     Does de-median the audio data at the end
 
     Arguments
-        metadata_verbose: T/F, whether or not you're using the verbose format
-        datestring: 6 character string for experiment date
-        header_size: size of header
+        metadata: str, what format/version of metadata you're using
         neural_channel: channel of neural data in the binary file
         speaker_channel: channel of audio data in the binary file
+        audio_drop_threshold:
+        neural_drop_threshold:
+        day_directory: str, suffix for the day's directory in 'scripts' repo
+        has_extra_channel: T/F, are you using more than just the first channel
+        extra_channel: int, which other channel you're recording from (zero-indexed)
     Returns
         audio_l: list
             The list is the same length as `metadata`, unless broken files
@@ -345,32 +239,41 @@ def get_data_without_onsets(metadata, datestring, header_size, neural_channel, s
             print("warning: {} does not exist".format(datafile))
             continue
 
+        config_file = os.path.join(data_directory, session_name,'config.json')
+        header_file = os.path.join(data_directory, session_name, 'packet_headers.csv')
+        ## Open the file
+        # Load config
+        with open(config_file) as fi:
+            config = json.load(fi)
 
-        ## Open the file and read the header
-        # Read the data
-        with open(datafile, "rb") as fi:
-            data_bytes = fi.read()
+        # Parse params we need from config
+        gains = np.array(config['gains'])
+        n_channels = len(gains)
+        sampling_rate = config['sampling_rate']
+        full_range_mV = config['pos_fullscale'] - config['neg_fullscale']
+        full_range_V = full_range_mV/1000
 
-        # Skip if nothing
-        if len(data_bytes) == 0:
-            print("warning: {} is empty".format(datafile))
-            sampling_rate = "skipped"
-            continue
+        # Load headers
+        header_df = pandas.read_table(header_file, sep=',')
 
-        # We need to parse the first header separately because it has data that
-        # we need to parse the rest of the packets.
-        first_header_bytes = data_bytes[:header_size]
-        first_header_info = parse_header(first_header_bytes)
+        # Extract packet number and unwrap it
+        packet_number = np.unwrap(header_df['packet_num'], period=256)
 
-        # We use this a lot so extract from the dict
-        sampling_rate = first_header_info['sampling_sps']
+        # Assert no tearing
+        assert (np.diff(packet_number) == 1).all()
 
+        # Load raw data
+        data = np.fromfile(datafile, dtype=int).reshape(-1, n_channels)
 
-        ## Parse the entire file
-        data = parse_data(
-            data_bytes,
-            first_header_info['number_channels'],
-            first_header_info['number_samples'])
+        # Rescale - the full range is used by the bit_depth
+        data = data * full_range_V / 2 ** 24
+
+        # Account for gain that was applied by ADS1299
+        # data will then be in true uV
+        # noise floor appears to have stdev .04uV on neural channel and
+        # 0.2uV on speaker channel
+        data = data / np.array(config['gains'])
+
         ## Extract audio and neural data
         audio_data, neural_data = extract_single_ad_and_nrl(
             data,neural_channel,speaker_channel,
@@ -749,24 +652,34 @@ def get_ABR_data_paths():
     computer = socket.gethostname()
     if computer == 'squid':
         # Rowan's lab desktop
-        LV_directory = os.path.expanduser('~/mnt/cuttlefish/abr/LVdata')
+        LV_directory = os.path.normpath(os.path.expanduser(
+            '~/mnt/cuttlefish/surgery/abr_data'))
         Pickle_directory = os.path.expanduser('~/mnt/cuttlefish/rowan/ABR/Figs_Pickles')
         Metadata_directory = os.path.expanduser('~/scripts/scripts/rowan/ABR_data')
     elif computer == 'DESKTOP-BIEUSUU':
-        # The surgery computer
+        # The surgery computer- windows partition
         LV_directory = os.path.normpath(os.path.expanduser('~/LVdata'))
+        Metadata_directory = os.path.normpath(os.path.expanduser(
+            'C:/Users/mouse/Documents/GitHub/scripts/rowan/ABR_data'))
+        Pickle_directory = os.path.normpath(os.path.expanduser('~/Pickle Temporary Storage'))
+    elif computer == 'mantaray':
+        # The surgery computer- windows partition
+        LV_directory = os.path.normpath(os.path.expanduser(
+            '~/mnt/cuttlefish/surgery/abr_data'))
         Metadata_directory = os.path.normpath(os.path.expanduser(
             'C:/Users/mouse/Documents/GitHub/scripts/rowan/ABR_data'))
         Pickle_directory = os.path.normpath(os.path.expanduser('~/Pickle Temporary Storage'))
     elif computer == 'NSY-0183-PC':
         # Rowan's new laptop
-        LV_directory = 'None-- work from pickles'
+        LV_directory = os.path.normpath(os.path.expanduser(
+            'C:/Users/kgargiu/Documents/GitHub/pickles'))
         Metadata_directory = os.path.normpath(os.path.expanduser
             ('C:/Users/kgargiu/Documents/GitHub/scripts/rowan/ABR_data'))
         Pickle_directory = os.path.normpath(os.path.expanduser(
             'C:/Users/kgargiu/Documents/GitHub/pickles'))
     elif computer=='Theseus':
-        LV_directory = 'None-- work from pickles'
+        LV_directory = os.path.normpath(os.path.expanduser(
+            'C:/Users/kgarg/Documents/GitHub/pickles'))
         Metadata_directory = os.path.normpath(os.path.expanduser
             ('C:/Users/kgarg/Documents/GitHub/scripts/rowan/ABR_data'))
         Pickle_directory = os.path.normpath(os.path.expanduser(
