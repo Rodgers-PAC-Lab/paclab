@@ -3,6 +3,7 @@
 """
 import scipy.signal
 import numpy as np
+import pandas
 
 def identify_click_times(speaker_signal_V, threshold_V,
     highpass_freq=50, sampling_rate=16000, refrac_samples=750,
