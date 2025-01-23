@@ -151,3 +151,44 @@ def categorize_clicks(click_times, speaker_signal_hp, amplitude_cuts,
     click_params['polarity'] = click_params['amplitude_V'] > 0
     
     return click_params
+
+def slice_audio_on_clicks(speaker_signal_hp, click_params,
+    slice_start_sample=-10, slice_stop_sample=10):
+    """Extract a slice of audio data around each click
+    
+    speaker_signal_hp : array
+        Audio data
+    
+    click_params : DataFrame, from categorize_clicks
+    
+    slice_start_sample, slice_stop_sample : how much data to take around click
+    
+    Returns: DataFrame
+        index: label * polarity * t_samples
+        columns: timepoint
+        One row per click
+    """
+    # A 0.1 ms click is only a few samples long
+    triggered_ad = np.array([
+        speaker_signal_hp[
+        trigger + slice_start_sample:trigger + slice_stop_sample]
+        for trigger in click_params['t_samples']])
+
+    # DataFrame
+    triggered_ad = pandas.DataFrame(triggered_ad)
+    
+    # Label columns with timepoints
+    triggered_ad.columns = pandas.Series(
+        range(slice_start_sample, slice_stop_sample),
+        name='timepoint')
+    
+    # Label index with click identity
+    triggered_ad.index = pandas.MultiIndex.from_frame(
+        click_params[['label', 'polarity', 't_samples']])
+    
+    # Reorder ldevels
+    triggered_ad = triggered_ad.reorder_levels(
+        ['label', 'polarity', 't_samples']).sort_index()
+    
+    return triggered_ad
+    
