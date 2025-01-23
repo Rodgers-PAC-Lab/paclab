@@ -192,3 +192,39 @@ def slice_audio_on_clicks(speaker_signal_hp, click_params,
     
     return triggered_ad
     
+def trim_outliers(df, abs_max_sigma=3, stdev_sigma=3):
+    """Drop outlier rows from df
+    
+    df : DataFrame
+    abs_max_sigma : Drop rows with an absmax greater than this many sigma
+        from the mean
+    stdev_sigma : Same for the stdev of the row
+    
+    Returns: DataFrame
+        A DataFrame with the outlier rows dropped
+    """
+    res = df.copy()
+    
+    if abs_max_sigma is not None:
+        # Find the absmax of each trial
+        vals1 = res.abs().max(1)
+
+        # Typically this is bimodal, with a normal distribution of real data
+        # and a second mode contaminated by EKG
+        # A simple approach is to drop trials >N sigma from the mean
+        thresh1 = vals1.mean() + abs_max_sigma * vals1.std()
+        mask = vals1 > thresh1
+        
+        # Drop
+        res = res.loc[~mask]
+
+    if stdev_sigma is not None:
+        # Same with the stdev of each trial
+        vals2 = res.std(1)
+        thresh2 = vals2.mean() + stdev_sigma * vals2.std()
+        mask = vals2 > thresh2
+
+        # Drop
+        res = res.loc[~mask]
+    
+    return res
