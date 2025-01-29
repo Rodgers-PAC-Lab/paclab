@@ -191,7 +191,65 @@ def slice_audio_on_clicks(speaker_signal_hp, click_params,
         ['label', 'polarity', 't_samples']).sort_index()
     
     return triggered_ad
+
+def slice_neural_on_clicks(neural_data_hp, click_params, 
+    slice_start_sample, slice_stop_sample, channel_names=None):
+    """ Extract a slice of neural data around each click
     
+    The only difference from slice_audio_on_clicks is that this works on a
+    2d array instead of a 1d array.
+    
+    neural_data_hp : 2d array
+        Audio data
+    
+    click_params : DataFrame, from categorize_clicks
+    
+    slice_start_sample, slice_stop_sample : how much data to take around click
+    
+    channel_names : list-like
+        Must be the same length as the number of columns in neural_data_hp
+        These become the names of the channels in the result
+        If this is None, then the channels are simply numbered in the result
+    
+    Returns: DataFrame
+        index: label * polarity * t_samples
+        columns: channel * timepoint
+        One row per click    
+    """
+    # Default channel_names is numbers
+    if channel_names is None:
+        channel_names = list(range(neural_data_hp.shape[1]))
+    
+    # Extract highpassed neural data around triggers
+    # Shape is (n_triggers, n_timepoints, n_channels)
+    triggered_neural = np.array([
+        neural_data_hp[trigger + slice_start_sample:trigger + slice_stop_sample]
+        for trigger in click_params['t_samples']])
+
+    # Remove channel as a level
+    triggered_neural = triggered_neural.reshape(
+        [triggered_neural.shape[0], -1])        
+
+    # DataFrame
+    triggered_neural = pandas.DataFrame(triggered_neural)
+    triggered_neural.index = pandas.MultiIndex.from_frame(
+        click_params[['label', 'polarity', 't_samples']])
+    triggered_neural = triggered_neural.reorder_levels(
+        ['label', 'polarity', 't_samples']).sort_index()
+
+    # The columns are interdigitated samples and channels
+    triggered_neural.columns = pandas.MultiIndex.from_product([
+        pandas.Index(
+        range(slice_start_sample, slice_stop_sample), name='timepoint'),
+        pandas.Index(channel_names, name='channel')
+        ])
+    
+    # Stack channel on index, because ultimately these will be concatenated
+    # over sessions, and channels won't be the same
+    triggered_neural = triggered_neural.stack('channel', future_stack=True)
+    
+    return triggered_neural
+
 def trim_outliers(df, abs_max_sigma=3, stdev_sigma=3):
     """Drop outlier rows from df
     
@@ -228,3 +286,43 @@ def trim_outliers(df, abs_max_sigma=3, stdev_sigma=3):
         res = res.loc[~mask]
     
     return res
+
+def trim_outliers_from_neural(triggered_neural, abs_max_sigma=3, stdev_sigma=3):
+    """Trim the outliers, separately by channel.
+    
+    Workflow
+    ---
+    Slice out each channel of triggered neural. Apply trim_outliers to it,
+    which removes the rows that are outliers according to abs_max_sigma
+    and stdev_sigma (see `trim_outliers`). Concatenates the results back
+    together again.
+    
+    Returns: DataFrame
+        Same columns as triggered_neural, but with the outlier rows dropped
+    """
+    # Iterate over channels
+    trimmed_l = []
+    keys_l = []
+    for channel in triggered_neural.index.get_level_values('channel').unique():
+        # Slice
+        this_tn = triggered_neural.xs(channel, level='channel')
+        
+        # Trim
+        trimmed = trim_outliers(
+            this_tn,
+            abs_max_sigma=abs_max_sigma, 
+            stdev_sigma=stdev_sigma,
+            )
+        
+        # Store
+        trimmed_l.append(trimmed)
+        keys_l.append(channel)
+    
+    # Concat
+    big_trimmed = pandas.concat(trimmed_l, keys=keys_l, names=['channel'])
+    
+    # Reorder levels to be like triggered_neural
+    big_trimmed = big_trimmed.reorder_levels(
+        triggered_neural.index.names).sort_index()      
+
+    return big_trimmed
