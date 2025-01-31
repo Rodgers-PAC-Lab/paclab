@@ -339,7 +339,7 @@ class ThreadedFileWriter(object):
             ]
         
         # Erase the file
-        with open('output.dat', 'wb') as output_file:
+        with open(self.output_filename, 'wb') as output_file:
             pass
         
         # Write the headers
