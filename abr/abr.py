@@ -1,3 +1,6 @@
+# TODO: Remove functions we don't need, move any functions we do need into
+# dedicated files here with meaningful names (loading, signal_processing, etc)
+
 import math
 import os.path
 import struct
