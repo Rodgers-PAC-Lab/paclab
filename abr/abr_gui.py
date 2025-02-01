@@ -670,8 +670,9 @@ def get_ABR_data_paths():
         LV_directory = os.path.normpath(os.path.expanduser(
             '~/mnt/cuttlefish/surgery/abr_data'))
         Metadata_directory = os.path.normpath(os.path.expanduser(
-            'C:/Users/mouse/Documents/GitHub/scripts/rowan/ABR_data'))
-        Pickle_directory = os.path.normpath(os.path.expanduser('~/Pickle Temporary Storage'))
+            '~/dev/scripts/rowan/ABR_data'))
+        Pickle_directory = os.path.normpath(os.path.expanduser(
+            '~/Pickle_Temporary_Storage'))
     elif computer == 'NSY-0183-PC':
         # Rowan's new laptop
         LV_directory = os.path.normpath(os.path.expanduser(
