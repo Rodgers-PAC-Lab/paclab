@@ -33,6 +33,15 @@ def load_recording(recording_directory):
     full_range_mV = config['pos_fullscale'] - config['neg_fullscale']
     full_range_V = full_range_mV / 1000
 
+    # This wasn't always stored. When it wasn't stored, the dtype was
+    # (mistakenly) int64
+    if 'output_dtype' in config:
+        assert config['output_dtype'] == 'int32'
+        output_dtype = np.int32
+    else:
+        # This was a mistake in early verions
+        output_dtype = int
+
     
     ## Load headers
     header_df = pandas.read_table(header_file, sep=',')
@@ -45,7 +54,7 @@ def load_recording(recording_directory):
 
     
     ## Load raw data
-    data = np.fromfile(data_file, dtype=int).reshape(-1, n_channels)
+    data = np.fromfile(data_file, dtype=output_dtype).reshape(-1, n_channels)
 
     # Rescale - the full range is used by the bit_depth
     data = data * full_range_V / 2 ** 24

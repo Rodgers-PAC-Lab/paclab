@@ -222,10 +222,19 @@ class ABR_Device(object):
         
         # Log the configs that were used
         to_json = query_res['message']
+        
+        # Store configs from this object
         to_json['gains'] = self.gains
         to_json['sampling_rate'] = self.sampling_rate
         to_json['session_start_time'] = self.session_dt_str
         
+        # Mistakenly, this was int64 in early versions of this software
+        # There is currently no support for changing the output_dtype
+        # This makes the output_dtype explicit, and also works as a flag
+        # for when this fix went into effect
+        to_json['output_dtype'] = 'int32'
+        
+        # Write the config file
         with open(os.path.join(self.session_dir, 'config.json'), 'w') as fi:
             json.dump(to_json, fi)
             

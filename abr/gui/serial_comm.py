@@ -537,10 +537,13 @@ def quick_exit(ser):
 
 def parse_data_payload_bytes(payload_bytes):
     # Unpack the payload
+    # 'i' indicates int32, but the result is always int
     unpacked = struct.unpack('>4000i', payload_bytes)
 
     # reshape
-    # TODO: this converts to int64, fix this
     reshaped = np.reshape(unpacked, (500, 8))
+    
+    # convert back to int32, which is how it was loaded
+    reshaped = reshaped.astype(np.int32)
 
     return reshaped
