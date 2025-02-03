@@ -1271,7 +1271,7 @@ class MainWindow(PyQt5.QtWidgets.QMainWindow):
         # Call start using that filename
         self.start(replay_filename=replay_filename)
 
-    def start(self, replay_filename=None):
+    def start(self, checkable_state=None, replay_filename=None):
         """Start a session
         
         This function is called when start button is clicked, or indirectly
@@ -1293,6 +1293,8 @@ class MainWindow(PyQt5.QtWidgets.QMainWindow):
             self.oscilloscope_widget.start
             self.timer_update.start
         """
+        print(f'replay filename is now {replay_filename}')
+
         ## Set self.experimenter based on self.line_edit_experimenter.text()
         # Get the current value of experimenter
         # This line_edit is not queried at any other time, only at the time

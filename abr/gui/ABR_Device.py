@@ -168,7 +168,7 @@ class ABR_Device(object):
         
     def start_session(self, replay_filename=None):
         print('starting abr session...')
-        print(replay_filename)
+        print(f'replay filename is {replay_filename}')        
         
 
         ## Store the datetime str for the current session
