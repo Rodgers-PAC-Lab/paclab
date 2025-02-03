@@ -23,7 +23,6 @@ class ABR_Device(object):
         abr_data_path='/home/mouse/mnt/cuttlefish/surgery/abr_data',
         data_in_memory_duration_s=60,
         experimenter='mouse',
-        mode='live',
         ):
         """Initialize a new ABR_Device object to collect ABR data.
         
@@ -62,9 +61,6 @@ class ABR_Device(object):
         
         # How much data to keep in memory
         self.data_in_memory_duration_s = data_in_memory_duration_s
-        
-        # Whether to play data live or replay canned data
-        self.mode = mode
         
         
         ## Instance variables
@@ -150,7 +146,6 @@ class ABR_Device(object):
             match_found = False
             for existing_session_name in existing_session_names:
                 if existing_session_name.startswith(session_number_str):
-                    print(f'match found: {existing_session_name}')
                     match_found = True
                     break
             
@@ -171,112 +166,119 @@ class ABR_Device(object):
         
         return session_number, session_dir
         
-    def start_session(self):
+    def start_session(self, replay_filename=None):
         print('starting abr session...')
+        print(replay_filename)
         
+
+        ## Store the datetime str for the current session
+        self.session_dt_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+
 
         ## Define a session_name and create the session_directory
         self.session_number, self.session_dir = (
             self.determine_session_directory())
 
-        print(f'creating output directory {self.session_dir}')
-        os.mkdir(self.session_dir)
-        
-        # Also store the datetime str for the current session
-        self.session_dt_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        
-        
-        ## Open a serial connection to the teensy
-        self.ser = serial.Serial(
-            port=self.serial_port,
-            baudrate=self.serial_baudrate,
-            timeout=self.serial_timeout,
-            )
+        # Only create the output directory if this is a live session
+        if replay_filename is None:
+            print(f'creating output directory {self.session_dir}')
+            os.mkdir(self.session_dir)
         
         
-        ## Close out the previous session
-        print('flushing serial port')
-        
-        # Flush
-        self.ser.flushInput()
-        self.ser.flush()
-        
-        # Stop data acquisition if it's already happening
-        serial_comm.write_stop(
-            self.ser, warn_if_not_running=False, warn_if_running=True)
-        
-        
-        ## Query the serial port
-        # Just a consistency check because the answer should always be the same
-        query_res = serial_comm.write_query(self.ser)
-
-
-        ## Set parameters
-        # Form the command
-        # TODO: document these other parameters
-        str_gains = ','.join([str(gain) for gain in self.gains])
-        cmd_str = f'U,8,{self.sampling_rate},0,{str_gains};'
-        
-        # Log
-        print(f'setting parameters: {cmd_str}')
-        
-        # Log the configs that were used
-        to_json = query_res['message']
-        
-        # Store configs from this object
-        to_json['gains'] = self.gains
-        to_json['sampling_rate'] = self.sampling_rate
-        to_json['session_start_time'] = self.session_dt_str
-        
-        # Mistakenly, this was int64 in early versions of this software
-        # There is currently no support for changing the output_dtype
-        # This makes the output_dtype explicit, and also works as a flag
-        # for when this fix went into effect
-        to_json['output_dtype'] = 'int32'
-        
-        # Write the config file
-        with open(os.path.join(self.session_dir, 'config.json'), 'w') as fi:
-            json.dump(to_json, fi)
+        ## These steps only occur if we're in live mode
+        if replay_filename is None:
+            ## Open a serial connection to the teensy
+            self.ser = serial.Serial(
+                port=self.serial_port,
+                baudrate=self.serial_baudrate,
+                timeout=self.serial_timeout,
+                )
             
-        # Send the command
-        serial_comm.write_setupU(self.ser, cmd_str)
+            
+            ## Close out the previous session
+            print('flushing serial port')
+            
+            # Flush
+            self.ser.flushInput()
+            self.ser.flush()
+            
+            # Stop data acquisition if it's already happening
+            serial_comm.write_stop(
+                self.ser, warn_if_not_running=False, warn_if_running=True)
+            
+            
+            ## Query the serial port
+            # Just a consistency check because the answer should always be the same
+            query_res = serial_comm.write_query(self.ser)
 
 
-        ## Tell it to start
-        print('starting acquisition...')
-        serial_comm.write_start(self.ser)
+            ## Set parameters
+            # Form the command
+            # TODO: document these other parameters
+            str_gains = ','.join([str(gain) for gain in self.gains])
+            cmd_str = f'U,8,{self.sampling_rate},0,{str_gains};'
+            
+            # Log
+            print(f'setting parameters: {cmd_str}')
+            
+            # Log the configs that were used
+            to_json = query_res['message']
+            
+            # Store configs from this object
+            to_json['gains'] = self.gains
+            to_json['sampling_rate'] = self.sampling_rate
+            to_json['session_start_time'] = self.session_dt_str
+            
+            # Mistakenly, this was int64 in early versions of this software
+            # There is currently no support for changing the output_dtype
+            # This makes the output_dtype explicit, and also works as a flag
+            # for when this fix went into effect
+            to_json['output_dtype'] = 'int32'
+            
+            # Write the config file
+            with open(os.path.join(self.session_dir, 'config.json'), 'w') as fi:
+                json.dump(to_json, fi)
+                
+            # Send the command
+            serial_comm.write_setupU(self.ser, cmd_str)
 
 
-        ## Start the TSR
-        # Choose it, depending on mode
-        if self.mode == 'live':
+            ## Tell it to start
+            print('starting acquisition...')
+            serial_comm.write_start(self.ser)
+
+            
+            ## Start acquiring
             self.tsr = ThreadedSerialReader(self.ser, verbose=False)
-        elif self.mode == 'canned':
-            self.tsr = ThreadedFileReader(
-                '/home/mouse/mnt/cuttlefish/abr/LVdata/241120/BG/BG-0004.bin')
+            self.tsr.start()
+
+
+            ## Start the TFW
+            # This parameter determines how much data is kept in memory before
+            # writing to disk
+            # We want to make sure at least that many chunks are kept in the deque
+            # before writing out
+            minimum_deq_length = int(np.rint(
+                self.data_in_memory_duration_s * self.sampling_rate / 500))
+            
+            # Create tfw
+            self.tfw = ThreadedFileWriter(
+                self.tsr.deq_data, 
+                self.tsr.deq_headers,
+                verbose=False,
+                output_filename=os.path.join(self.session_dir, 'data.bin'),
+                output_header_filename=os.path.join(self.session_dir, 'packet_headers.csv'),
+                minimum_deq_length=minimum_deq_length,
+                )
+            self.tfw.start()
         
-        # Start it
-        self.tsr.start()
-        
-        
-        ## Start the TFW
-        # This parameter determines how much data is kept in memory before
-        # writing to disk
-        # We want to make sure at least that many chunks are kept in the deque
-        # before writing out
-        minimum_deq_length = int(np.rint(
-            self.data_in_memory_duration_s * self.sampling_rate / 500))
-        
-        # Create tfw
-        self.tfw = ThreadedFileWriter(
-            self.tsr.deq_data, 
-            self.tsr.deq_headers,
-            verbose=False,
-            output_filename=os.path.join(self.session_dir, 'data.bin'),
-            output_header_filename=os.path.join(self.session_dir, 'packet_headers.csv'),
-            minimum_deq_length=minimum_deq_length,
-            )
-        self.tfw.start()
+        else:
+            ## This is the canned mode
+            # In this case the deque will never be emptied
+            # TODO: initialize a dummy ThreadedFileWriter to do nothing
+            # but empty the deque
+            self.tsr = ThreadedFileReader(replay_filename)
+            self.tsr.start()
 
     def stop_session(self):
         print('stopping abr session...')
@@ -461,7 +463,8 @@ class ThreadedFileReader(object):
         # We need to parse the first header separately because it has data that
         # we need to parse the rest of the packets.
         first_header_bytes = data_bytes[:60]
-        self.first_header_info = paclab.abr.parse_header(first_header_bytes)
+        self.first_header_info = paclab.abr.labview_loading.parse_header(
+            first_header_bytes)
 
         # Make it match expected format
         self.first_header_info['header_size'] = 0
@@ -473,7 +476,7 @@ class ThreadedFileReader(object):
         self.first_header_info['n_samples'] = 0
 
         # Parse the entire file
-        self.data = paclab.abr.parse_data(
+        self.data = paclab.abr.labview_loading.parse_data(
             data_bytes,
             self.first_header_info['number_channels'],
             self.first_header_info['number_samples'])

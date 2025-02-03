@@ -13,6 +13,7 @@ make a mean ABR
 import sys
 import traceback
 import datetime
+import os
 import scipy.signal
 import paclab.abr
 import numpy as np
@@ -627,8 +628,10 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         # And emptied from the left by ThreadedFileWriter, which won't empty
         #   it below a certain minimum length
         # We can't get more than minimum deq_length
-        if needed_chunks > self.abr_device.tfw.minimum_deq_length:
-            needed_chunks = self.abr_device.tfw.minimum_deq_length
+        if self.abr_device.tfw is not None:
+            # This guard is needed because we don't have a dummy TFW yet
+            if needed_chunks > self.abr_device.tfw.minimum_deq_length:
+                needed_chunks = self.abr_device.tfw.minimum_deq_length
 
         # We can't get more data than there is available
         n_chunks_available = len(self.abr_device.tsr.deq_data)
@@ -1051,10 +1054,15 @@ class MainWindow(PyQt5.QtWidgets.QMainWindow):
         
         
         ## Create objects here that would actually do the work, tfw etc
-        self.abr_device = ABR_Device.ABR_Device()
-        
-        # Pass along needed params to ABR_Device
-        self.abr_device.experimenter = experimenter
+        self.abr_device = ABR_Device.ABR_Device(
+            verbose=True, 
+            serial_port='/dev/ttyACM0', 
+            serial_baudrate=115200, 
+            serial_timeout=0.1,
+            abr_data_path='/home/mouse/mnt/cuttlefish/surgery/abr_data',
+            data_in_memory_duration_s=60,
+            experimenter=self.experimenter,
+            )        
         
         
         ## Create a timer to check for any uncaught errors
@@ -1099,14 +1107,14 @@ class MainWindow(PyQt5.QtWidgets.QMainWindow):
         system_control_layout = PyQt5.QtWidgets.QHBoxLayout(self) 
         container_layout.addLayout(system_control_layout)
 
-        # Create self.start_button
+        # Create buttons
+        self.set_up_replay_button()
         self.set_up_start_button()
-        
-        # Create self.start_button
         self.set_up_stop_button()
         
-        # Creating vertical layout for start and stop buttons
+        # Creating vertical layout for buttons
         start_stop_layout = PyQt5.QtWidgets.QVBoxLayout()
+        start_stop_layout.addWidget(self.replay_button)
         start_stop_layout.addWidget(self.start_button)
         start_stop_layout.addWidget(self.stop_button)        
         
@@ -1154,8 +1162,20 @@ class MainWindow(PyQt5.QtWidgets.QMainWindow):
         # Show it
         self.show()
 
+    def set_up_replay_button(self):
+        """Create a replay button and connect to self.replay"""
+        # Create button
+        self.replay_button = PyQt5.QtWidgets.QPushButton("Replay Session")
+        
+        # Set style
+        self.replay_button.setStyleSheet(
+            "background-color : green; color: white;") 
+
+        # Start the abr_device and the updates
+        self.replay_button.clicked.connect(self.replay)        
+    
     def set_up_start_button(self):
-        """Create a start button and connect to self.start_sequence"""
+        """Create a start button and connect to self.start"""
         # Create button
         self.start_button = PyQt5.QtWidgets.QPushButton("Start Session")
         
@@ -1167,7 +1187,7 @@ class MainWindow(PyQt5.QtWidgets.QMainWindow):
         self.start_button.clicked.connect(self.start)
 
     def set_up_stop_button(self):
-        """Create a start button and connect to self.start_sequence"""
+        """Create a stop button and connect to self.stop"""
         # Create button
         self.stop_button = PyQt5.QtWidgets.QPushButton("Stop Session")
         
@@ -1234,11 +1254,46 @@ class MainWindow(PyQt5.QtWidgets.QMainWindow):
             # Stop
             self.stop()
 
-    def start(self):
+    def replay(self):
+        """Replay a previous session
+        
+        This function is called when the replay button is clicked.
+        The user will be asked to choose a binary file in a QFileDialog,
+        and then this is passed to `start`.
+        """
+        # Get a folder
+        replay_filename = PyQt5.QtWidgets.QFileDialog.getOpenFileName(self,
+            "Choose a binary file", 
+            "/home/mouse/mnt/cuttlefish/surgery/abr_data", 
+            "Binary Files (*.bin)",
+            )[0]
+        
+        # Call start using that filename
+        self.start(replay_filename=replay_filename)
+
+    def start(self, replay_filename=None):
         """Start a session
         
-        Called when start button is clicked
+        This function is called when start button is clicked, or indirectly
+        when the replay button is clicked.
+        
+        replay_filename : str or None
+            If this is a path to an existing binary file, then self.abr_device
+            will replay that file. If that file does not work for some reason, 
+            an error is raised.
+            
+            If this is None, then self.abr_device will collect new data.
+        
+        Workflow
+        * The current value of the "experimenter" line edit is used to set
+            the experimenter parameter in self.abr_device, which in turn 
+            determines where the data is stored.
+        * The individual widgets are started:
+            self.abr_device.start_session (using replay_filename)
+            self.oscilloscope_widget.start
+            self.timer_update.start
         """
+        ## Set self.experimenter based on self.line_edit_experimenter.text()
         # Get the current value of experimenter
         # This line_edit is not queried at any other time, only at the time
         # the session is started, so don't try to use it for other things 
@@ -1254,12 +1309,14 @@ class MainWindow(PyQt5.QtWidgets.QMainWindow):
         # Store self.experimenter
         self.experimenter = text       
         
-        # Also update ABR_Device, which is what actually uses this value
+        # Also update in self.abr_device
         self.abr_device.experimenter = self.experimenter
         
+        
+        ## Start stuff
         # TODO: Handle the case where the abr_device doesn't actually start
         # because it's not ready
-        self.abr_device.start_session()
+        self.abr_device.start_session(replay_filename=replay_filename)
 
         # Start plot widgets
         # TODO: consider controlling their timers in this object
