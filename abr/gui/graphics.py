@@ -32,7 +32,7 @@ import paclab.abr.abr
 
 
 class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
-    def __init__(self, abr_device, update_interval_ms=100, 
+    def __init__(self, abr_device, update_interval_ms=1000, 
         duration_data_to_analyze_s=300, 
         neural_scope_xrange_s=5,
         neural_scope_yrange_uV=30000,
@@ -1325,7 +1325,7 @@ class MainWindow(PyQt5.QtWidgets.QMainWindow):
         self.oscilloscope_widget.start()
         
         # Start updating MainWindow (such as System Control)
-        self.timer_update.start()
+        self.timer_update.start(self.update_interval_ms)
 
     def stop(self):
         """Called when we want to stop everything
