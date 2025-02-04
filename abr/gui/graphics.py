@@ -968,77 +968,63 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
 
         # Average audio by condition
         avg_audio_by_condition = triggered_ad.groupby(['amplitude', 'polarity']).mean()
-
-
         times.append(('aggregation done', datetime.datetime.now()))
 
-        ## Plot everything by amplitude
-        # This plotting block takes 27 ms
-        for n_amplitude, amplitude in enumerate(triggered_ad.index.levels[0]):
-            # Plot neg clicks
-            try:
-                topl = avg_audio_by_condition.loc[amplitude].loc[False].copy()
-                
-                # Abslog it
-                topl = topl.abs()
-                topl = np.log10(topl)
-                topl[topl < 0] = 0
-                
-                self.abr_audio_monitor_neg_handle_l[n_amplitude].setData(
-                    x=topl.index,
-                    y=topl.values)
-            except KeyError:
-                pass
 
-            # Plot pos clicks
-            try:
-                topl = avg_audio_by_condition.loc[amplitude].loc[True].copy()
-                
-                # Abslog it
-                topl = topl.abs()
-                topl = np.log10(topl)                
-                topl[topl < 0] = 0
-                
-                self.abr_audio_monitor_pos_handle_l[n_amplitude].setData(
-                    x=topl.index,
-                    y=topl.values)
-            except KeyError:
-                pass
-            
-            # Plot ABR ch0
-            try:
-                self.abr_ch0_handle_l[n_amplitude].setData(
-                    avg_abrs.loc[amplitude].loc[0])
-            except KeyError:
-                pass
-
-            # Plot artefact ch0
-            if avg_arts is not None:
-                try:
-                    self.artefact_ch0_handle_l[n_amplitude].setData(
-                        avg_arts.loc[amplitude].loc[0])
-                except KeyError:
-                    pass            
-
-            # Plot ABR ch2
-            try:
-                self.abr_ch2_handle_l[n_amplitude].setData(
-                    avg_abrs.loc[amplitude].loc[2])
-            except KeyError:
-                pass
-
-            # Plot artefact ch2
-            if avg_arts is not None:
-                try:
-                    self.artefact_ch2_handle_l[n_amplitude].setData(
-                        avg_arts.loc[amplitude].loc[2])
-                except KeyError:
-                    pass 
+        ## Plot clicks by amplitude
+        # First abslog avg_audio_by_condition for display
+        avg_audio_by_condition = np.log10(np.abs(avg_audio_by_condition))
+        avg_audio_by_condition[avg_audio_by_condition < 0] = 0
         
+        # Reindex by amplitudes that should exist so things line up
+        avg_audio_by_condition = avg_audio_by_condition.reindex(
+            triggered_ad.index.levels[0], level='amplitude')
+        
+        # Separate negatives and positives
+        neg_clicks = avg_audio_by_condition.xs(False, level='polarity')
+        pos_clicks = avg_audio_by_condition.xs(True, level='polarity')
+
+        # Plot negatives
+        zobj = zip(self.abr_audio_monitor_neg_handle_l, neg_clicks.values)
+        for handle, topl in zobj:
+            handle.setData(
+                x=avg_audio_by_condition.columns.values, y=topl)
+
+        # Plot positives
+        zobj = zip(self.abr_audio_monitor_pos_handle_l, pos_clicks.values)
+        for handle, topl in zobj:
+            handle.setData(
+                x=avg_audio_by_condition.columns.values, y=topl)
+        
+        
+        ## Plot ABR by amplitude
+        # Reindex by amplitudes that should exist so things line up
+        avg_abrs = avg_abrs.reindex(
+            triggered_ad.index.levels[0], level='amplitude')
+        
+        # Plot ch0
+        abr_ch0 = avg_abrs.loc[:, 0]
+        zobj = zip(self.abr_ch0_handle_l, abr_ch0.values)
+        for handle, topl in zobj:
+            handle.setData(x=abr_ch0.columns.values, y=topl)
+
+        # Plot ch2
+        abr_ch2 = avg_abrs.loc[:, 2]
+        zobj = zip(self.abr_ch2_handle_l, abr_ch2.values)
+        for handle, topl in zobj:
+            handle.setData(x=abr_ch2.columns.values, y=topl)
+
+        
+        ## Print debug timing information
         times.append(('done', datetime.datetime.now()))
         times = pandas.DataFrame.from_records(times)
         times['diff'] = times.iloc[:, 1].diff().dt.total_seconds()
-        #print(times)
+        
+        # Store total time taken
+        self.update_time_taken = times['diff'].sum()
+        
+        # More verbose output
+        # print(times)
 
 class MainWindow(PyQt5.QtWidgets.QMainWindow):
     def __init__(self, update_interval_ms=100, experimenter='mouse'):
