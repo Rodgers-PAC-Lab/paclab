@@ -85,6 +85,9 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         # Parameters that we can't set until we have data
         self.heart_rate = -1
         
+        # Debug
+        self.print_timing_information = False
+        
         
         ## ABR extraction parameters
         # TODO: Link these to the audio generation code in some way
@@ -624,58 +627,58 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
             
             or returns None, None, None if there is no data to get
         """
-        #~ # How many chunks we need in order to fill out the plot
-        #~ needed_chunks = int(np.ceil(
-            #~ self.duration_data_to_analyze_s * self.abr_device.sampling_rate / 500
-            #~ ))
+        # How many chunks we need in order to fill out the plot
+        needed_chunks = int(np.ceil(
+            self.duration_data_to_analyze_s * self.abr_device.sampling_rate / 500
+            ))
         
-        #~ # It's filled from the right by ThreadedSerialReader
-        #~ # And emptied from the left by ThreadedFileWriter, which won't empty
-        #~ #   it below a certain minimum length
-        #~ # We can't get more than minimum deq_length
-        #~ if self.abr_device.tfw is not None:
-            #~ # This guard is needed because we don't have a dummy TFW yet
-            #~ if needed_chunks > self.abr_device.tfw.minimum_deq_length:
-                #~ needed_chunks = self.abr_device.tfw.minimum_deq_length
+        # It's filled from the right by ThreadedSerialReader
+        # And emptied from the left by ThreadedFileWriter, which won't empty
+        #   it below a certain minimum length
+        # We can't get more than minimum deq_length
+        if self.abr_device.tfw is not None:
+            # This guard is needed because we don't have a dummy TFW yet
+            if needed_chunks > self.abr_device.tfw.minimum_deq_length:
+                needed_chunks = self.abr_device.tfw.minimum_deq_length
 
-        #~ # We can't get more data than there is available
-        #~ n_chunks_available = len(self.abr_device.tsr.deq_data)
-        #~ if needed_chunks > n_chunks_available:
-            #~ needed_chunks = n_chunks_available
+        # We can't get more data than there is available
+        n_chunks_available = len(self.abr_device.tsr.deq_data)
+        if needed_chunks > n_chunks_available:
+            needed_chunks = n_chunks_available
         
-        #~ # Return if no data available
-        #~ if needed_chunks == 0:
-            #~ return None, None, None
-        
-        #~ # If data is added to the right during this operation, it won't matter
-        #~ # because the index is still valid. But if data is also emptied from
-        #~ # the left, the data will tear. Fortunately emptying from the left
-        #~ # is more rare.
-        #~ # TODO: use a lock here to prevent that
-        #~ data_chunk_l = []
-        #~ data_header_l = []
-        #~ for idx in range(n_chunks_available - needed_chunks, n_chunks_available):
-            #~ data_chunk = self.abr_device.tsr.deq_data[idx]
-            #~ data_header = self.abr_device.tsr.deq_headers[idx]
-            
-            #~ # Store
-            #~ data_chunk_l.append(data_chunk)
-            #~ data_header_l.append(data_header)
-        
-        #~ # Concat the data
-        #~ big_data = np.concatenate(data_chunk_l)
-        #~ headers_df = pandas.DataFrame.from_records(data_header_l)
-        
-        
-        
-        
-        # Get from tfw
-        if self.abr_device.tfw.big_data is None:
+        # Return if no data available
+        if needed_chunks == 0:
             return None, None, None
         
-        big_data = self.abr_device.tfw.big_data[
-            :self.abr_device.tfw.big_data_last_col]
-        headers_df = pandas.DataFrame.from_records(self.abr_device.tfw.headers_l)
+        # If data is added to the right during this operation, it won't matter
+        # because the index is still valid. But if data is also emptied from
+        # the left, the data will tear. Fortunately emptying from the left
+        # is more rare.
+        # TODO: use a lock here to prevent that
+        data_chunk_l = []
+        data_header_l = []
+        for idx in range(n_chunks_available - needed_chunks, n_chunks_available):
+            data_chunk = self.abr_device.tsr.deq_data[idx]
+            data_header = self.abr_device.tsr.deq_headers[idx]
+            
+            # Store
+            data_chunk_l.append(data_chunk)
+            data_header_l.append(data_header)
+        
+        # Concat the data
+        big_data = np.concatenate(data_chunk_l)
+        headers_df = pandas.DataFrame.from_records(data_header_l)
+        
+        
+        
+        
+        #~ # Get from tfw
+        #~ if self.abr_device.tfw.big_data is None:
+            #~ return None, None, None
+        
+        #~ big_data = self.abr_device.tfw.big_data[
+            #~ :self.abr_device.tfw.big_data_last_col]
+        #~ headers_df = pandas.DataFrame.from_records(self.abr_device.tfw.headers_l)
         
       
         
@@ -1002,20 +1005,30 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
             triggered_ad.index.levels[0], level='amplitude')
         
         # Separate negatives and positives
-        neg_clicks = avg_audio_by_condition.xs(False, level='polarity')
-        pos_clicks = avg_audio_by_condition.xs(True, level='polarity')
+        # Can be None if we haven't had any yet (eg, at beginning)
+        try:
+            neg_clicks = avg_audio_by_condition.xs(False, level='polarity')
+        except KeyError:
+            neg_clicks = None
+        
+        try:
+            pos_clicks = avg_audio_by_condition.xs(True, level='polarity')
+        except KeyError:
+            pos_clicks = None
 
         # Plot negatives
-        zobj = zip(self.abr_audio_monitor_neg_handle_l, neg_clicks.values)
-        for handle, topl in zobj:
-            handle.setData(
-                x=avg_audio_by_condition.columns.values, y=topl)
+        if neg_clicks is not None:
+            zobj = zip(self.abr_audio_monitor_neg_handle_l, neg_clicks.values)
+            for handle, topl in zobj:
+                handle.setData(
+                    x=avg_audio_by_condition.columns.values, y=topl)
 
         # Plot positives
-        zobj = zip(self.abr_audio_monitor_pos_handle_l, pos_clicks.values)
-        for handle, topl in zobj:
-            handle.setData(
-                x=avg_audio_by_condition.columns.values, y=topl)
+        if pos_clicks is not None:
+            zobj = zip(self.abr_audio_monitor_pos_handle_l, pos_clicks.values)
+            for handle, topl in zobj:
+                handle.setData(
+                    x=avg_audio_by_condition.columns.values, y=topl)
         
         
         ## Plot ABR by amplitude
@@ -1053,8 +1066,9 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         #~ print(concatted)
         meaned = concatted.groupby('event')['diff'].mean()
 
-        print(meaned)
-        print(meaned.sum())
+        if self.print_timing_information:
+            print(meaned)
+            print(meaned.sum())
 
 class MainWindow(PyQt5.QtWidgets.QMainWindow):
     def __init__(self, update_interval_ms=100, experimenter='mouse'):
