@@ -40,6 +40,13 @@ class ABR_Device(object):
         
         abr_data_path : str
             Path to root directory to store data in
+        
+        data_in_memory_duration_s : numeric
+            No data will be removed from the deque in memory and written to
+            disk until the length of the deque exceeds this amount. This is
+            also the maximum amount of data that can be analyzed by the GUI.
+            Increasing this value gives a more accurate representation of the
+            ABR, but it will slow GUI updates, and delay writing to disk. 
         """
         ## Store parameters
         # Currently not supported to change the sampling rate or gains
@@ -288,8 +295,6 @@ class ABR_Device(object):
             # before writing out
             minimum_deq_length = int(np.rint(
                 self.data_in_memory_duration_s * self.sampling_rate / 500))
-            
-            minimum_deq_length = 5
             
             # Create tfw
             self.tfw = ThreadedFileWriter(
