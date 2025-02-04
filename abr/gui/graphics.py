@@ -165,9 +165,12 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         self.abr_pos_audio_monitor_widget = pg.PlotWidget()
         self.abr_neg_audio_monitor_widget = pg.PlotWidget()
         self.abr_neural_ch0_monitor_widget = pg.PlotWidget()
-        self.abr_artefact_ch0_monitor_widget = pg.PlotWidget()
         self.abr_neural_ch2_monitor_widget = pg.PlotWidget()
-        self.abr_artefact_ch2_monitor_widget = pg.PlotWidget()
+        
+        # Size them
+        self.neural_plot_widget.setFixedHeight(150)
+        self.highpass_neural_plot_widget.setFixedHeight(150)
+        self.speaker_plot_widget.setFixedHeight(150)
         
         
         ## Debugging
@@ -309,9 +312,7 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         self.abr_layout.addWidget(self.abr_pos_audio_monitor_widget)
         self.abr_layout.addWidget(self.abr_neg_audio_monitor_widget)
         self.abr_layout.addWidget(self.abr_neural_ch0_monitor_widget)
-        self.abr_layout.addWidget(self.abr_artefact_ch0_monitor_widget)
         self.abr_layout.addWidget(self.abr_neural_ch2_monitor_widget)
-        self.abr_layout.addWidget(self.abr_artefact_ch2_monitor_widget)
 
         # GridLayout for params
         abr_layout_grid = PyQt5.QtWidgets.QGridLayout()
@@ -462,17 +463,13 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         self.abr_pos_audio_monitor_widget.setBackground('k')
         self.abr_neg_audio_monitor_widget.setBackground('k')
         self.abr_neural_ch0_monitor_widget.setBackground('k')
-        self.abr_artefact_ch0_monitor_widget.setBackground('k')
         self.abr_neural_ch2_monitor_widget.setBackground('k')
-        self.abr_artefact_ch2_monitor_widget.setBackground('k')
 
         # Set the title
         self.abr_pos_audio_monitor_widget.setTitle('positive clicks')
         self.abr_neg_audio_monitor_widget.setTitle('negative clicks')
         self.abr_neural_ch0_monitor_widget.setTitle('ch0 ABR')
-        self.abr_artefact_ch0_monitor_widget.setTitle('ch0 artefact')
         self.abr_neural_ch2_monitor_widget.setTitle('ch2 ABR')
-        self.abr_artefact_ch2_monitor_widget.setTitle('ch2 artefact')
         
         # Set the ylabel
         self.neural_plot_widget.setLabel('left', 'neural signal (uV)')
@@ -509,11 +506,7 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
             0, self.abr_audio_monitor_yrange_uV) # abslog scale
         self.abr_neural_ch0_monitor_widget.setYRange(
             -self.abr_neural_yrange_uV, self.abr_neural_yrange_uV)
-        self.abr_artefact_ch0_monitor_widget.setYRange(
-            -self.abr_neural_yrange_uV, self.abr_neural_yrange_uV)
         self.abr_neural_ch2_monitor_widget.setYRange(
-            -self.abr_neural_yrange_uV, self.abr_neural_yrange_uV)
-        self.abr_artefact_ch2_monitor_widget.setYRange(
             -self.abr_neural_yrange_uV, self.abr_neural_yrange_uV)
     
     def initalize_plot_handles(self):
@@ -564,9 +557,7 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         self.abr_audio_monitor_pos_handle_l = []
         self.abr_audio_monitor_neg_handle_l = []
         self.abr_ch0_handle_l = []
-        self.artefact_ch0_handle_l = []
         self.abr_ch2_handle_l = []
-        self.artefact_ch2_handle_l = []
         for n_amplitude, amplitude_label in enumerate(self.amplitude_labels):
             # Positive clicks
             handle = self.abr_pos_audio_monitor_widget.plot(
@@ -589,26 +580,12 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
                 )
             self.abr_ch0_handle_l.append(handle)
 
-            # Artefacts ch0
-            handle = self.abr_artefact_ch0_monitor_widget.plot(
-                x=[], y=[],
-                pen=(n_amplitude, len(self.amplitude_labels))
-                )
-            self.artefact_ch0_handle_l.append(handle)
-
             # ABRs ch2
             handle = self.abr_neural_ch2_monitor_widget.plot(
                 x=[], y=[],
                 pen=(n_amplitude, len(self.amplitude_labels))
                 )
             self.abr_ch2_handle_l.append(handle)
-
-            # Artefacts ch2
-            handle = self.abr_artefact_ch2_monitor_widget.plot(
-                x=[], y=[],
-                pen=(n_amplitude, len(self.amplitude_labels))
-                )
-            self.artefact_ch2_handle_l.append(handle)
     
     def start(self):
         # Start the timer that will continuously update
@@ -783,6 +760,7 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         self.setup_plot_graphics()
         times.append(('setup_plot_graphics done', datetime.datetime.now()))
         
+        
         ## Get data (now in uV)
         # This takes a while - 40 ms max
         big_data, headers_df, t_values = self.get_data()
@@ -806,6 +784,7 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         
         times.append(('data gotten 2', datetime.datetime.now()))
         
+        
         ## Bandpass neural
         # Each of these filters can take 20 ms * n_channels
         nyquist_freq = self.abr_device.sampling_rate / 2
@@ -817,6 +796,7 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         neural_data_hp = scipy.signal.filtfilt(ahi, bhi, neural_data, axis=0)
 
         times.append(('first hp', datetime.datetime.now()))
+        
         
         ## Bandpass heartbeat
         # TODO: hardcoded to ch0, make this selectable
@@ -1193,8 +1173,8 @@ class MainWindow(PyQt5.QtWidgets.QMainWindow):
         self.setWindowTitle('ABR')
         
         # Size in pixels (can be used to modify the size of window)
-        self.resize(1200, 800)
-        self.move(100, 100)
+        self.resize(1200, 900)
+        self.move(10, 10)
         
         # Show it
         self.show()
