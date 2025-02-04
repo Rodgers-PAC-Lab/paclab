@@ -32,7 +32,9 @@ import paclab.abr.abr
 
 
 class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
-    def __init__(self, abr_device, update_interval_ms=1000, 
+    def __init__(self, 
+        abr_device, 
+        update_interval_ms=250, # it can't really go any faster
         duration_data_to_analyze_s=300, 
         neural_scope_xrange_s=5,
         neural_scope_yrange_uV=30000,
@@ -1064,7 +1066,11 @@ class MainWindow(PyQt5.QtWidgets.QMainWindow):
             experimenter=self.experimenter,
             )        
         
-        
+        # Keep track of whether abr_device is running (to avoid multiple
+        # clicks on the start button)
+        self.experiment_running = False
+
+
         ## Create a timer to check for any uncaught errors
         self.timer_check_for_errors = PyQt5.QtCore.QTimer(self)
         
@@ -1262,9 +1268,11 @@ class MainWindow(PyQt5.QtWidgets.QMainWindow):
         and then this is passed to `start`.
         """
         # Get a folder
-        replay_filename = PyQt5.QtWidgets.QFileDialog.getOpenFileName(self,
+        replay_filename = PyQt5.QtWidgets.QFileDialog.getOpenFileName(
+            self,
             "Choose a binary file", 
-            "/home/mouse/mnt/cuttlefish/surgery/abr_data", 
+            #"/home/mouse/mnt/cuttlefish/surgery/abr_data", 
+            os.path.expanduser('~/mnt/cuttlefish/abr/LVdata/250109/BG/'),
             "Binary Files (*.bin)",
             )[0]
         
@@ -1293,7 +1301,14 @@ class MainWindow(PyQt5.QtWidgets.QMainWindow):
             self.oscilloscope_widget.start
             self.timer_update.start
         """
-        print(f'replay filename is now {replay_filename}')
+        ## Warn if already runing
+        if self.experiment_running:
+            print(
+                'error: you clicked start but the experiment '
+                'is already running')
+            return
+        self.experiment_running = True
+        
 
         ## Set self.experimenter based on self.line_edit_experimenter.text()
         # Get the current value of experimenter
@@ -1333,10 +1348,17 @@ class MainWindow(PyQt5.QtWidgets.QMainWindow):
         Can happen because stop button was clicked, or because an error
         occurred.
         """
+        # Stop the ABR device (serial port, etc)
         self.abr_device.stop_session()
+        
+        # Stop updating the scope widgets
         self.oscilloscope_widget.stop()
         
+        # Stop updating the main window
         self.timer_update.stop()
+        
+        # Set to False so we can start the session again
+        self.experiment_running = False
 
     def update(self):
         # Set data labels
