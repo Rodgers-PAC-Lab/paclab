@@ -269,7 +269,7 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
             PyQt5.QtWidgets.QLabel('plot ch 2?'), 2, 0)
         row_highpass_neural_boxes.addWidget(self.checkbox_plot_ch2_highpass, 2, 1)
         
-        # Param: heart rate
+        # Label: heart rate
         self.label_heart_rate = PyQt5.QtWidgets.QLabel('')
         row_highpass_neural_boxes.addWidget(
             PyQt5.QtWidgets.QLabel('heart rate'), 3, 0)
@@ -337,6 +337,20 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
             PyQt5.QtWidgets.QLabel('abr yrange (uV)'), 1, 0)
         abr_layout_grid.addWidget(
             self.line_edit_abr_neural_yrange_uV, 1, 1)        
+
+        # Label: ch0 abr noise
+        self.label_abr_ch0_noise = PyQt5.QtWidgets.QLabel('')
+        abr_layout_grid.addWidget(
+            PyQt5.QtWidgets.QLabel('ch0 ABR noise'), 2, 0)
+        abr_layout_grid.addWidget(
+            self.label_abr_ch0_noise, 2, 1)        
+
+        # Label: ch2 abr noise
+        self.label_abr_ch2_noise = PyQt5.QtWidgets.QLabel('')
+        abr_layout_grid.addWidget(
+            PyQt5.QtWidgets.QLabel('ch2 ABR noise'), 3, 0)
+        abr_layout_grid.addWidget(
+            self.label_abr_ch2_noise, 3, 1)        
 
         
         ## Set labels and colors of `plot_widget`
@@ -935,46 +949,29 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
 
         times.append(('neural triggered', datetime.datetime.now()))
 
-        ## Identify outlier trials
-        # Figure out how to handle this in the case that ch2 might be noise
-        
-        #~ # How much to keep
-        #~ quantile = 1
-
-        #~ # Identify trials in the top quantile of abs().max() and std()
-        #~ vals1 = triggered_neural.abs().max(1)
-        #~ thresh1 = vals1.quantile(quantile)
-        #~ mask1 = vals1 > thresh1
-
-        #~ vals2 = triggered_neural.std(1)
-        #~ thresh2 = vals2.quantile(quantile)
-        #~ mask2 = vals2 > thresh2
-
-        #~ # Combine the masks
-        #~ mask = mask1 | mask2
-        #~ outlier_trials = triggered_neural.index[mask]
-        
-        outlier_trials = []
-        
 
         ## Aggregate
-        # Average by condition after dropping outlier trials
-        avg_by_condition = triggered_neural.drop(outlier_trials).groupby(
+        # Average by condition
+        avg_by_condition = triggered_neural.groupby(
             ['polarity', 'amplitude']).mean()
 
         # Average out polarity
         avg_abrs = avg_by_condition.groupby('amplitude').mean()
 
-        # Compare polarities to measure speaker artefact
-        try:
-            avg_arts = avg_by_condition.loc[True] - avg_by_condition.loc[False]
-        except KeyError:
-            avg_arts = None
-
         # Average audio by condition
         avg_audio_by_condition = triggered_ad.groupby(['amplitude', 'polarity']).mean()
         times.append(('aggregation done', datetime.datetime.now()))
 
+
+        ## Estimate noise level
+        # We estimate noise for each amplitude separately, and then mean
+        # them together.
+        ch0_noise = avg_abrs.loc[:, 0].loc[:, -40:-19].std(axis=1).mean()
+        ch2_noise = avg_abrs.loc[:, 2].loc[:, -40:-19].std(axis=1).mean()
+
+        self.label_abr_ch0_noise.setText('{:.2f} uV'.format(ch0_noise))
+        self.label_abr_ch2_noise.setText('{:.2f} uV'.format(ch2_noise))
+        
 
         ## Plot clicks by amplitude
         # First abslog avg_audio_by_condition for display
