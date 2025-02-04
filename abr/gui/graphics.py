@@ -8,6 +8,13 @@ Allow flipping live switch
 efficiency updates in update
 invert color order in ABR plot
 make a mean ABR
+
+Timing parameters:
+ABR_Device.data_in_memory_duration_s
+OscilloscopeWidget.update_interval_ms
+MainWindow.update_interval_ms
+time.sleep in ThreadedFileWriter
+
 """
 
 import sys
@@ -668,10 +675,9 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         # Concat the data
         big_data = np.concatenate(data_chunk_l)
         headers_df = pandas.DataFrame.from_records(data_header_l)
+
         
-        
-        
-        
+        ## Alternative, unused code for getting data
         #~ # Get from tfw
         #~ if self.abr_device.tfw.big_data is None:
             #~ return None, None, None
@@ -680,18 +686,13 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
             #~ :self.abr_device.tfw.big_data_last_col]
         #~ headers_df = pandas.DataFrame.from_records(self.abr_device.tfw.headers_l)
         
-      
         
-        
-        
-        
+        ## Get data in real physical units
         # Convert to uV
         big_data = big_data * 9e6 / 2**24 # right?
         
         # Account for gain (TODO: load from config)
         big_data = big_data / np.array(self.abr_device.gains)
-        #~ big_data[:, 0] = big_data[:, 0] / 24
-        #~ big_data[:, 2] = big_data[:, 2] / 24
         
         # Use headers_df to make the xvals
         packet_numbers = np.unwrap(headers_df['packet_num'], period=256)
