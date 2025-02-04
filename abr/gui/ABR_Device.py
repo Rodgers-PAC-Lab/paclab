@@ -280,6 +280,28 @@ class ABR_Device(object):
             self.tsr = ThreadedFileReader(replay_filename)
             self.tsr.start()
 
+
+            ## Start the TFW
+            # This parameter determines how much data is kept in memory before
+            # writing to disk
+            # We want to make sure at least that many chunks are kept in the deque
+            # before writing out
+            minimum_deq_length = int(np.rint(
+                self.data_in_memory_duration_s * self.sampling_rate / 500))
+            
+            minimum_deq_length = 5
+            
+            # Create tfw
+            self.tfw = ThreadedFileWriter(
+                self.tsr.deq_data, 
+                self.tsr.deq_headers,
+                verbose=False,
+                output_filename=None,
+                output_header_filename=None,
+                minimum_deq_length=minimum_deq_length,
+                )
+            self.tfw.start()            
+
     def stop_session(self):
         print('stopping abr session...')
         # Tell the thread to stop reading - it will keep reading until the 
@@ -317,14 +339,23 @@ class ThreadedFileWriter(object):
 
         deq_data : deque 
             Data filled by and shared with ThreadedSerialReader
+            These are the chunks of data, with time along the rows
         
-        output_filename : str
+        deq_headers : deque 
+            Data filled by and shared with ThreadedSerialReader
+            These are the headers for each chunk of data, one row per chunk
+
+        output_filename : str or None
             Where to write out data
+            if None, nothing is written to disk
         
+        output_header_filename : str or None
+            Where to write out headers
+            if None, nothing is written to disk
+
         minimum_deq_length : int
             If len(deq) < minimum_deq_length, no data will be popped or written
             This ensure there is always recent data to visualize
-        
         """
         # Store
         self.output_filename = output_filename
@@ -336,6 +367,18 @@ class ThreadedFileWriter(object):
         self.thread = None
         self.verbose = verbose
         self.n_chunks_written = 0
+        
+        # Set to null by default
+        if self.output_filename is None:
+            self.output_filename = os.devnull
+        
+        if self.output_header_filename is None:
+            self.output_header_filename = os.devnull
+        
+        # Keep track of big_data here
+        self.big_data_last_col = 0
+        self.big_data = None
+        self.headers_l = []
         
         # TODO: make this match the rest of the code
         self.header_colnames = [
@@ -371,15 +414,16 @@ class ThreadedFileWriter(object):
                 open(self.output_header_filename, 'a') as headers_out
                 ):
             while len(self.deq_data) > threshold:
+                ## Pop
                 # Pop the oldest data
                 data_chunk = self.deq_data.popleft()
                 
                 # Pop the oldest header
                 data_header = self.deq_headers.popleft()
             
-                # Append raw data to output file
-                # TODO: ensure that this is writing in a consistent format
-                # such as int32. Seems to be writing as int64
+                
+                ## Append raw data to output file
+                # Note: just maintains dtype of whatever data_chunk is
                 data_out.write(data_chunk)
                 
                 # Append header
@@ -387,6 +431,49 @@ class ThreadedFileWriter(object):
                     [str(data_header[colname]) for colname in self.header_colnames])
                 headers_out.write(str_to_write + '\n')
                 
+
+                ## Append to big data
+                if self.big_data is None:
+                    # Special case, it doesn't exist yet
+                    # This is also how we find out how many columns it has
+                    self.big_data = data_chunk.copy()
+                    self.big_data_last_col = len(data_chunk)
+                
+                else:
+                    # The normal case, self.big_data does exist
+                    # This is how long it will be
+                    self.new_big_data_last_col = (
+                        self.big_data_last_col + len(data_chunk))
+
+                    # Grow if needed
+                    if self.new_big_data_last_col > len(self.big_data):
+                        # Make it twice as big as needed
+                        new_len = 2 * self.new_big_data_last_col
+                        
+                        # Fill it with zeros
+                        self.new_big_data = np.zeros(
+                            (new_len, self.big_data.shape[1]))
+                        
+                        # Copy in the old data
+                        self.new_big_data[:self.big_data_last_col] = (
+                            self.big_data[:self.big_data_last_col])
+                        
+                        # Rename
+                        self.big_data = self.new_big_data
+                    
+                    # Add the new data at the end
+                    self.big_data[
+                        self.big_data_last_col:self.new_big_data_last_col] = (
+                        data_chunk)
+
+                    # Update the pointer
+                    self.big_data_last_col = self.new_big_data_last_col
+
+                # Store read headers
+                self.headers_l.append(data_header)
+
+                
+                ## Keep track of how many chunks written
                 self.n_chunks_written += 1
         
         if self.verbose:

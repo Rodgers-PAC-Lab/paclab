@@ -160,6 +160,9 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         self.abr_artefact_ch2_monitor_widget = pg.PlotWidget()
         
         
+        ## Debugging
+        self.times_l = []
+        
         ## Set the layout
         # Primarily it will be vertical, with each element being horizontal
         self.layout = PyQt5.QtWidgets.QVBoxLayout(self) 
@@ -621,53 +624,71 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
             
             or returns None, None, None if there is no data to get
         """
-        # How many chunks we need in order to fill out the plot
-        needed_chunks = int(np.ceil(
-            self.duration_data_to_analyze_s * self.abr_device.sampling_rate / 500
-            ))
+        #~ # How many chunks we need in order to fill out the plot
+        #~ needed_chunks = int(np.ceil(
+            #~ self.duration_data_to_analyze_s * self.abr_device.sampling_rate / 500
+            #~ ))
         
-        # It's filled from the right by ThreadedSerialReader
-        # And emptied from the left by ThreadedFileWriter, which won't empty
-        #   it below a certain minimum length
-        # We can't get more than minimum deq_length
-        if self.abr_device.tfw is not None:
-            # This guard is needed because we don't have a dummy TFW yet
-            if needed_chunks > self.abr_device.tfw.minimum_deq_length:
-                needed_chunks = self.abr_device.tfw.minimum_deq_length
+        #~ # It's filled from the right by ThreadedSerialReader
+        #~ # And emptied from the left by ThreadedFileWriter, which won't empty
+        #~ #   it below a certain minimum length
+        #~ # We can't get more than minimum deq_length
+        #~ if self.abr_device.tfw is not None:
+            #~ # This guard is needed because we don't have a dummy TFW yet
+            #~ if needed_chunks > self.abr_device.tfw.minimum_deq_length:
+                #~ needed_chunks = self.abr_device.tfw.minimum_deq_length
 
-        # We can't get more data than there is available
-        n_chunks_available = len(self.abr_device.tsr.deq_data)
-        if needed_chunks > n_chunks_available:
-            needed_chunks = n_chunks_available
+        #~ # We can't get more data than there is available
+        #~ n_chunks_available = len(self.abr_device.tsr.deq_data)
+        #~ if needed_chunks > n_chunks_available:
+            #~ needed_chunks = n_chunks_available
         
-        # Return if no data available
-        if needed_chunks == 0:
+        #~ # Return if no data available
+        #~ if needed_chunks == 0:
+            #~ return None, None, None
+        
+        #~ # If data is added to the right during this operation, it won't matter
+        #~ # because the index is still valid. But if data is also emptied from
+        #~ # the left, the data will tear. Fortunately emptying from the left
+        #~ # is more rare.
+        #~ # TODO: use a lock here to prevent that
+        #~ data_chunk_l = []
+        #~ data_header_l = []
+        #~ for idx in range(n_chunks_available - needed_chunks, n_chunks_available):
+            #~ data_chunk = self.abr_device.tsr.deq_data[idx]
+            #~ data_header = self.abr_device.tsr.deq_headers[idx]
+            
+            #~ # Store
+            #~ data_chunk_l.append(data_chunk)
+            #~ data_header_l.append(data_header)
+        
+        #~ # Concat the data
+        #~ big_data = np.concatenate(data_chunk_l)
+        #~ headers_df = pandas.DataFrame.from_records(data_header_l)
+        
+        
+        
+        
+        # Get from tfw
+        if self.abr_device.tfw.big_data is None:
             return None, None, None
         
-        # If data is added to the right during this operation, it won't matter
-        # because the index is still valid. But if data is also emptied from
-        # the left, the data will tear. Fortunately emptying from the left
-        # is more rare.
-        # TODO: use a lock here to prevent that
-        data_chunk_l = []
-        data_header_l = []
-        for idx in range(n_chunks_available - needed_chunks, n_chunks_available):
-            data_chunk = self.abr_device.tsr.deq_data[idx]
-            data_header = self.abr_device.tsr.deq_headers[idx]
-            
-            # Store
-            data_chunk_l.append(data_chunk)
-            data_header_l.append(data_header)
+        big_data = self.abr_device.tfw.big_data[
+            :self.abr_device.tfw.big_data_last_col]
+        headers_df = pandas.DataFrame.from_records(self.abr_device.tfw.headers_l)
         
-        # Concat the data
-        big_data = np.concatenate(data_chunk_l)
-        headers_df = pandas.DataFrame.from_records(data_header_l)
+      
+        
+        
+        
         
         # Convert to uV
         big_data = big_data * 9e6 / 2**24 # right?
         
         # Account for gain (TODO: load from config)
         big_data = big_data / np.array(self.abr_device.gains)
+        #~ big_data[:, 0] = big_data[:, 0] / 24
+        #~ big_data[:, 2] = big_data[:, 2] / 24
         
         # Use headers_df to make the xvals
         packet_numbers = np.unwrap(headers_df['packet_num'], period=256)
@@ -1017,14 +1038,23 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         
         ## Print debug timing information
         times.append(('done', datetime.datetime.now()))
-        times = pandas.DataFrame.from_records(times)
-        times['diff'] = times.iloc[:, 1].diff().dt.total_seconds()
+        times = pandas.DataFrame.from_records(times, columns=['event', 't'])
+        times['diff'] = times['t'].diff().dt.total_seconds()
         
         # Store total time taken
         self.update_time_taken = times['diff'].sum()
         
         # More verbose output
-        # print(times)
+        self.times_l.append(times)
+        concatted = pandas.concat(
+            self.times_l, 
+            keys=range(len(self.times_l)), 
+            names=['rep'])
+        #~ print(concatted)
+        meaned = concatted.groupby('event')['diff'].mean()
+
+        print(meaned)
+        print(meaned.sum())
 
 class MainWindow(PyQt5.QtWidgets.QMainWindow):
     def __init__(self, update_interval_ms=100, experimenter='mouse'):
