@@ -352,6 +352,13 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         abr_layout_grid.addWidget(
             self.label_abr_ch2_noise, 3, 1)        
 
+        # Label: plot time required
+        self.label_plot_time_required = PyQt5.QtWidgets.QLabel('')
+        abr_layout_grid.addWidget(
+            PyQt5.QtWidgets.QLabel('plotting time required (ms)'), 4, 0)
+        abr_layout_grid.addWidget(
+            self.label_plot_time_required, 4, 1)            
+
         
         ## Set labels and colors of `plot_widget`
         self.setup_plot_graphics()
@@ -1034,16 +1041,18 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         
         # Store total time taken
         self.update_time_taken = times['diff'].sum()
+        self.label_plot_time_required.setText(
+            '{:.1f} ms'.format(self.update_time_taken * 1000))
         
-        # More verbose output
+        # Average over times
         self.times_l.append(times)
         concatted = pandas.concat(
             self.times_l, 
             keys=range(len(self.times_l)), 
             names=['rep'])
-        #~ print(concatted)
         meaned = concatted.groupby('event')['diff'].mean()
 
+        # More verbose output
         if self.print_timing_information:
             print(meaned)
             print(meaned.sum())
@@ -1163,6 +1172,12 @@ class MainWindow(PyQt5.QtWidgets.QMainWindow):
         row_session_boxes.addWidget(
             PyQt5.QtWidgets.QLabel('packets in memory'), 3, 0)
         row_session_boxes.addWidget(self.label_packets_in_memory, 3, 1)
+
+        # Param: n_late_reads
+        self.label_n_late_reads = PyQt5.QtWidgets.QLabel('')
+        row_session_boxes.addWidget(
+            PyQt5.QtWidgets.QLabel('# late reads'), 4, 0)
+        row_session_boxes.addWidget(self.label_n_late_reads, 4, 1)
 
 
         ## Set the size and title of the main window
@@ -1379,6 +1394,10 @@ class MainWindow(PyQt5.QtWidgets.QMainWindow):
 
             self.label_packets_in_memory.setText(str(
                 len(self.abr_device.tsr.deq_data)))
+            
+            self.label_n_late_reads.setText(str(
+                self.abr_device.tsr.late_reads))
+            
         
         #~ self.label_data_written_s = str(
             #~ len(self.abr_device.tfw.n_chunks_written) * 500 / 16000)
