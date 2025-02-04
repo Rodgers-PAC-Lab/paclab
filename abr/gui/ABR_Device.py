@@ -176,11 +176,11 @@ class ABR_Device(object):
 
 
         ## Define a session_name and create the session_directory
-        self.session_number, self.session_dir = (
-            self.determine_session_directory())
-
         # Only create the output directory if this is a live session
         if replay_filename is None:
+            self.session_number, self.session_dir = (
+                self.determine_session_directory())
+            
             print(f'creating output directory {self.session_dir}')
             os.mkdir(self.session_dir)
         
