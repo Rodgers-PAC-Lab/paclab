@@ -62,7 +62,7 @@ def read_and_classify_packet(
             # Data has been read but it wasn't sync bytes, so keep reading
             # A potential issue here if data is being sent faster than this
             # code can keep up with it, which will lead to late reads
-            sync_bytes = ser.read(1)
+            sync_bytes += ser.read(1)
     
     
     ## Deal with various edge cases relating to sync byte
