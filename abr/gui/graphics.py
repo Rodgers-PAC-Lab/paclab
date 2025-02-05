@@ -647,7 +647,7 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
                 needed_chunks = self.abr_device.tfw.minimum_deq_length
 
         # We can't get more data than there is available
-        n_chunks_available = len(self.abr_device.tsr.deq_data)
+        n_chunks_available = len(self.abr_device.tsr.deq_data2)
         if needed_chunks > n_chunks_available:
             needed_chunks = n_chunks_available
         
@@ -663,8 +663,8 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         data_chunk_l = []
         data_header_l = []
         for idx in range(n_chunks_available - needed_chunks, n_chunks_available):
-            data_chunk = self.abr_device.tsr.deq_data[idx]
-            data_header = self.abr_device.tsr.deq_headers[idx]
+            data_chunk = self.abr_device.tsr.deq_data2[idx]
+            data_header = self.abr_device.tsr.deq_headers2[idx]
             
             # Store
             data_chunk_l.append(data_chunk)
@@ -1078,8 +1078,8 @@ class MainWindow(PyQt5.QtWidgets.QMainWindow):
             serial_port='/dev/ttyACM0', 
             serial_baudrate=115200, 
             serial_timeout=0.1,
-            abr_data_path='/home/mouse/mnt/cuttlefish/surgery/abr_data',
-            data_in_memory_duration_s=60,
+            abr_data_path='/home/mouse/abr_data',
+            data_in_memory_duration_s=30,
             experimenter=self.experimenter,
             )        
         
@@ -1393,7 +1393,7 @@ class MainWindow(PyQt5.QtWidgets.QMainWindow):
                 self.abr_device.tsr.n_packets_read * 500 / 16000))
 
             self.label_packets_in_memory.setText(str(
-                len(self.abr_device.tsr.deq_data)))
+                len(self.abr_device.tsr.deq_data2)))
             
             self.label_n_late_reads.setText(str(
                 self.abr_device.tsr.late_reads))

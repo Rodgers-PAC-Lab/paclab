@@ -18,7 +18,7 @@ class ABR_Device(object):
     def __init__(self, 
         verbose=True, 
         serial_port='/dev/ttyACM0', 
-        serial_baudrate=115200, 
+        serial_baudrate=921600, 
         serial_timeout=0.1,
         abr_data_path='/home/mouse/mnt/cuttlefish/surgery/abr_data',
         data_in_memory_duration_s=60,
@@ -270,8 +270,8 @@ class ABR_Device(object):
             
             # Create tfw
             self.tfw = ThreadedFileWriter(
-                self.tsr.deq_data, 
-                self.tsr.deq_headers,
+                self.tsr.deq_data1, 
+                self.tsr.deq_headers1,
                 verbose=False,
                 output_filename=os.path.join(self.session_dir, 'data.bin'),
                 output_header_filename=os.path.join(self.session_dir, 'packet_headers.csv'),
@@ -298,8 +298,8 @@ class ABR_Device(object):
             
             # Create tfw
             self.tfw = ThreadedFileWriter(
-                self.tsr.deq_data, 
-                self.tsr.deq_headers,
+                self.tsr.deq_data1, 
+                self.tsr.deq_headers1,
                 verbose=False,
                 output_filename=None,
                 output_header_filename=None,
@@ -661,8 +661,10 @@ class ThreadedSerialReader(object):
         ser : serial.Serial
             Data will be read from this object and stored in self.deq
         """
-        self.deq_headers = collections.deque()
-        self.deq_data = collections.deque()
+        self.deq_headers1 = collections.deque()
+        self.deq_data1 = collections.deque()
+        self.deq_headers2 = collections.deque()
+        self.deq_data2 = collections.deque()
         self.ser = ser
         self.keep_reading = True
         self.late_reads = 0
@@ -681,8 +683,10 @@ class ThreadedSerialReader(object):
             self.late_reads += 1    
     
         # Append to the left side of the deque
-        self.deq_headers.append(data_packet['message'])
-        self.deq_data.append(data_packet['payload'])
+        self.deq_headers1.append(data_packet['message'])
+        self.deq_data1.append(data_packet['payload'])
+        self.deq_headers2.append(data_packet['message'])
+        self.deq_data2.append(data_packet['payload'])
         
         # Log
         self.n_packets_read += 1
@@ -700,7 +704,7 @@ class ThreadedSerialReader(object):
         # Continue as long as self.keep_reading
         while self.keep_reading:
             if self.verbose:
-                print(f'deqlen: {len(self.deq_data)}')
+                print(f'deqlen: {len(self.deq_data1)}')
             self.read_and_append()
         
         # self.keep_reading has been set False
