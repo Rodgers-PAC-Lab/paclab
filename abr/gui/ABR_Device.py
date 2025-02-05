@@ -681,6 +681,10 @@ class ThreadedSerialReader(object):
         if self.ser.in_waiting > 0:
             print(f'late read! {self.ser.in_waiting}')
             self.late_reads += 1    
+        
+        # Store the time
+        data_packet['message']['dt_message'] = datetime.datetime.now()
+        print(f"read packet {data_packet['message']['packet_num']}")
     
         # Append to the left side of the deque
         self.deq_headers1.append(data_packet['message'])
@@ -706,6 +710,14 @@ class ThreadedSerialReader(object):
             if self.verbose:
                 print(f'deqlen: {len(self.deq_data1)}')
             self.read_and_append()
+            
+            if self.n_packets_read == 10:
+                print('simulating pause')
+                # It seems like after this pause we get the next two packets, then a
+                # gap, then packets continue. But never a partial packet.
+                # Perhaps two packets fills the buffer, and after that all messages are
+                # simply dropped silently until there is space again.
+                time.sleep(1)
         
         # self.keep_reading has been set False
         # Read any last chunks
