@@ -674,17 +674,25 @@ class ThreadedSerialReader(object):
     
     def read_and_append(self):
         # Read a data packet
+        # Relatively long wait_time here, in hopes that if something is
+        # screwed up we can find sync bytes and get back on track
         data_packet = serial_comm.read_and_classify_packet(
-            self.ser, wait_time=0.1, assert_packet_type='data')
+            self.ser, wait_time=0.5, assert_packet_type='data')
         
         # If any data remains, this was a late read
-        if self.ser.in_waiting > 0:
-            print(f'late read! {self.ser.in_waiting}')
-            self.late_reads += 1    
-        
+        in_waiting = self.ser.in_waiting
+        if in_waiting > 0:
+            print(f'late read! {in_waiting} bytes in waiting')
+            self.late_reads += 1  
+            data_packet['message']['late_read'] = True
+            data_packet['message']['in_waiting'] = in_waiting
+        else:
+            data_packet['message']['late_read'] = False
+            data_packet['message']['in_waiting'] = in_waiting
+            
         # Store the time
-        data_packet['message']['dt_message'] = datetime.datetime.now()
-        #~ print(f"read packet {data_packet['message']['packet_num']}")
+        if self.verbose:
+            print(f"read packet {data_packet['message']['packet_num']}")
     
         # Append to the left side of the deque
         self.deq_headers1.append(data_packet['message'])
