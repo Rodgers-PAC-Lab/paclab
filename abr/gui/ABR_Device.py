@@ -18,7 +18,7 @@ class ABR_Device(object):
     def __init__(self, 
         verbose=True, 
         serial_port='/dev/ttyACM0', 
-        serial_baudrate=921600, 
+        serial_baudrate=115200, 
         serial_timeout=0.1,
         abr_data_path='/home/mouse/mnt/cuttlefish/surgery/abr_data',
         data_in_memory_duration_s=60,
@@ -34,6 +34,8 @@ class ABR_Device(object):
         
         serial_baudrate : numeric
             Baudrate to use
+            I suspect this is ignored. The actual data transfer rate is
+            16KHz * 8ch * 4B = 512KB/s, well over this baudrate.
         
         serial_timeout : numeric
             Time to wait for a message from the serial port before returning
