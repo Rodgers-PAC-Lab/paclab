@@ -385,26 +385,16 @@ class ThreadedFileWriter(object):
         #~ self.big_data = None
         #~ self.headers_l = []
         
-        # TODO: make this match the rest of the code
-        self.header_colnames = [
-            'header_size',
-            'header_nbytes',
-            'data_format_enum',
-            'data_format',
-            'total_packets',
-            'packet_num',
-            'data_class',
-            'n_samples',
-            ]
+        # This will be set by the first header that's received
+        self.header_colnames = None
         
         # Erase the file
         with open(self.output_filename, 'wb') as output_file:
             pass
         
         # Write the headers
-        with open(self.output_header_filename, 'a') as headers_out:
-            str_to_write = ','.join(self.header_colnames)
-            headers_out.write(str_to_write + '\n')            
+        with open(self.output_header_filename, 'w') as headers_out:
+            pass
 
     def write_to_disk(self, drain=False):
         # Don't write if the deq is too short, unless drain is True
@@ -426,6 +416,15 @@ class ThreadedFileWriter(object):
                 # Pop the oldest header
                 data_header = self.deq_headers.popleft()
             
+            
+                ## Set up the header row of headers_out if first time
+                if self.header_colnames is None:
+                    self.header_colnames = sorted(data_header.keys())
+                
+                    # Write the header
+                    str_to_write = ','.join(self.header_colnames)
+                    headers_out.write(str_to_write + '\n')            
+                
                 
                 ## Append raw data to output file
                 # Note: just maintains dtype of whatever data_chunk is
@@ -672,13 +671,25 @@ class ThreadedSerialReader(object):
     
     def read_and_append(self):
         # Read a data packet
+        # Relatively long wait_time here, in hopes that if something is
+        # screwed up we can find sync bytes and get back on track
         data_packet = serial_comm.read_and_classify_packet(
-            self.ser, wait_time=0.1, assert_packet_type='data')
+            self.ser, wait_time=0.5, assert_packet_type='data')
         
         # If any data remains, this was a late read
-        if self.ser.in_waiting > 0:
-            print(f'late read! {self.ser.in_waiting}')
-            self.late_reads += 1    
+        in_waiting = self.ser.in_waiting
+        if in_waiting > 0:
+            print(f'late read! {in_waiting} bytes in waiting')
+            self.late_reads += 1  
+            data_packet['message']['late_read'] = True
+            data_packet['message']['in_waiting'] = in_waiting
+        else:
+            data_packet['message']['late_read'] = False
+            data_packet['message']['in_waiting'] = in_waiting
+            
+        # Store the time
+        if self.verbose:
+            print(f"read packet {data_packet['message']['packet_num']}")
     
         # Append to the left side of the deque
         self.deq_headers.append(data_packet['message'])

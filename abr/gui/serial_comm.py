@@ -9,7 +9,7 @@ import numpy as np
 
 ## Functions to read Bill's protocol
 def read_and_classify_packet(
-    ser, wait_time=1, error_on_empty_message=True, assert_packet_type=None, 
+    ser, wait_time=0.5, error_on_empty_message=True, assert_packet_type=None, 
     verbose=False):
     """Read a header and then read the appropriate packet
     
@@ -66,32 +66,40 @@ def read_and_classify_packet(
     
     
     ## Deal with various edge cases relating to sync byte
-    # Handle empty message
-    if len(sync_bytes) == 0:
-        # This means no data was available
+    # Handle too few sync_bytes - this is most likely to happen if no data
+    # was sent at all. In this case, error or return None
+    if len(sync_bytes) < 4:
+        error_msg = (
+            f'{start_time} sync error: incomplete sync message received: '
+            f'{sync_bytes.hex()}')
         if error_on_empty_message:
-            raise ValueError('no data received')
+            raise ValueError(error_msg)
         else:
+            print(error_msg)
+            return None
+
+    # Handle too many bytes received, and none of them sync bytes
+    # In this case, error or return None, since the following bytes won't
+    # make sense
+    if sync_bytes[-4:] != b'\xAA\x55\x5A\xA5':
+        error_msg = (            
+            f'{start_time} sync error: no sync bytes found out of '
+            f'{len(sync_bytes)} total: {sync_bytes.hex()}')
+        if error_on_empty_message:
+            raise ValueError(error_msg)
+        else:
+            print(error_msg)
             return None
     
-    # Handle incomplete sync bytes
-    if len(sync_bytes) < 4:
-        # TODO: handle this error, probably keep reading until sync bytes found
-        raise ValueError(f'sync error: incomplete sync message received: {sync_bytes}')
-
-    # Handle sync byte never received
-    if sync_bytes[-4:] != b'\xAA\x55\x5A\xA5':
-        raise ValueError(f'sync error: no sync bytes found')
-    
-    # Handle data before sync_bytes
+    # Handle sync_bytes found, but only after extraneous bytes
     # In this case, warn about the dropped data and continue
     # This case, and the "good" case where exactly 4 correct sync bytes were
     # received, are the only cases where the code continues
     if len(sync_bytes) > 4:
-        dropped_bytes = len(sync_bytes) - 4
+        n_dropped_bytes = len(sync_bytes) - 4
         print(
-            'warning: extra data found before sync bytes, ignoring '
-            f'{dropped_bytes} bytes')
+            f'{start_time} warning: extra data found before sync bytes, '
+            f'ignoring {n_dropped_bytes} bytes: {sync_bytes.hex()}')
     
     
     ## Define the return value
@@ -107,12 +115,6 @@ def read_and_classify_packet(
     ## Read the packet type
     packet_type = ser.read(1)
 
-    # Log wait time
-    if verbose:
-        actual_wait_time = (datetime.datetime.now() - start_time).total_seconds()
-        print('waited {:g} s to receive message {}'.format(actual_wait_time, packet_type))
-    
-    
     if packet_type == b'\x0e':
         ## Query
         packet_type_s = 'query'
@@ -218,6 +220,14 @@ def read_and_classify_packet(
         # incorrectly found by random chance
         raise ValueError(f'unrecognized packet type: {packet_type}')
     
+    
+    ## Log latencies in the message
+    done_time = datetime.datetime.now()
+    message['start_time'] = str(start_time)
+    message['done_time'] = str(done_time)
+    message['time_taken'] = (done_time - start_time).total_seconds()
+    
+    # Return
     return {
         'packet_type_s': packet_type_s,
         'message': message,
