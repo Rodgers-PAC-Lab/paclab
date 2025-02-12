@@ -139,6 +139,7 @@ def get_metadata(data_directory, datestring, metadata_version):
         metadata['ch0_config'] = (metadata['positive_electrode'].str.cat(metadata['negative_electrode']))
         metadata['ch2_config'] = (metadata['positive_ch3'].str.cat(metadata['negative_ch3']))
         metadata = metadata.rename(columns={"session":"recording"})
+        metadata = metadata.drop(['pre_vs_post','positive_electrode','negative_electrode','positive_ch3','negative_ch3'],axis=1)
     elif metadata_version=='v5':
         metadata['recording_name'] = ['{:03d}'.format(n) for n in metadata['recording'].values]
 

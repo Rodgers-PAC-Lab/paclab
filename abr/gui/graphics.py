@@ -8,11 +8,19 @@ Allow flipping live switch
 efficiency updates in update
 invert color order in ABR plot
 make a mean ABR
+
+Timing parameters:
+ABR_Device.data_in_memory_duration_s
+OscilloscopeWidget.update_interval_ms
+MainWindow.update_interval_ms
+time.sleep in ThreadedFileWriter
+
 """
 
 import sys
 import traceback
 import datetime
+import os
 import scipy.signal
 import paclab.abr
 import numpy as np
@@ -31,7 +39,9 @@ import paclab.abr.abr
 
 
 class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
-    def __init__(self, abr_device, update_interval_ms=100, 
+    def __init__(self, 
+        abr_device, 
+        update_interval_ms=250, # it can't really go any faster
         duration_data_to_analyze_s=300, 
         neural_scope_xrange_s=5,
         neural_scope_yrange_uV=30000,
@@ -81,6 +91,9 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
 
         # Parameters that we can't set until we have data
         self.heart_rate = -1
+        
+        # Debug
+        self.print_timing_information = False
         
         
         ## ABR extraction parameters
@@ -152,10 +165,16 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         self.abr_pos_audio_monitor_widget = pg.PlotWidget()
         self.abr_neg_audio_monitor_widget = pg.PlotWidget()
         self.abr_neural_ch0_monitor_widget = pg.PlotWidget()
-        self.abr_artefact_ch0_monitor_widget = pg.PlotWidget()
         self.abr_neural_ch2_monitor_widget = pg.PlotWidget()
-        self.abr_artefact_ch2_monitor_widget = pg.PlotWidget()
         
+        # Size them
+        self.neural_plot_widget.setFixedHeight(150)
+        self.highpass_neural_plot_widget.setFixedHeight(150)
+        self.speaker_plot_widget.setFixedHeight(150)
+        
+        
+        ## Debugging
+        self.times_l = []
         
         ## Set the layout
         # Primarily it will be vertical, with each element being horizontal
@@ -250,7 +269,7 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
             PyQt5.QtWidgets.QLabel('plot ch 2?'), 2, 0)
         row_highpass_neural_boxes.addWidget(self.checkbox_plot_ch2_highpass, 2, 1)
         
-        # Param: heart rate
+        # Label: heart rate
         self.label_heart_rate = PyQt5.QtWidgets.QLabel('')
         row_highpass_neural_boxes.addWidget(
             PyQt5.QtWidgets.QLabel('heart rate'), 3, 0)
@@ -293,9 +312,7 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         self.abr_layout.addWidget(self.abr_pos_audio_monitor_widget)
         self.abr_layout.addWidget(self.abr_neg_audio_monitor_widget)
         self.abr_layout.addWidget(self.abr_neural_ch0_monitor_widget)
-        self.abr_layout.addWidget(self.abr_artefact_ch0_monitor_widget)
         self.abr_layout.addWidget(self.abr_neural_ch2_monitor_widget)
-        self.abr_layout.addWidget(self.abr_artefact_ch2_monitor_widget)
 
         # GridLayout for params
         abr_layout_grid = PyQt5.QtWidgets.QGridLayout()
@@ -320,6 +337,27 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
             PyQt5.QtWidgets.QLabel('abr yrange (uV)'), 1, 0)
         abr_layout_grid.addWidget(
             self.line_edit_abr_neural_yrange_uV, 1, 1)        
+
+        # Label: ch0 abr noise
+        self.label_abr_ch0_noise = PyQt5.QtWidgets.QLabel('')
+        abr_layout_grid.addWidget(
+            PyQt5.QtWidgets.QLabel('ch0 ABR noise'), 2, 0)
+        abr_layout_grid.addWidget(
+            self.label_abr_ch0_noise, 2, 1)        
+
+        # Label: ch2 abr noise
+        self.label_abr_ch2_noise = PyQt5.QtWidgets.QLabel('')
+        abr_layout_grid.addWidget(
+            PyQt5.QtWidgets.QLabel('ch2 ABR noise'), 3, 0)
+        abr_layout_grid.addWidget(
+            self.label_abr_ch2_noise, 3, 1)        
+
+        # Label: plot time required
+        self.label_plot_time_required = PyQt5.QtWidgets.QLabel('')
+        abr_layout_grid.addWidget(
+            PyQt5.QtWidgets.QLabel('plotting time required (ms)'), 4, 0)
+        abr_layout_grid.addWidget(
+            self.label_plot_time_required, 4, 1)            
 
         
         ## Set labels and colors of `plot_widget`
@@ -446,17 +484,13 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         self.abr_pos_audio_monitor_widget.setBackground('k')
         self.abr_neg_audio_monitor_widget.setBackground('k')
         self.abr_neural_ch0_monitor_widget.setBackground('k')
-        self.abr_artefact_ch0_monitor_widget.setBackground('k')
         self.abr_neural_ch2_monitor_widget.setBackground('k')
-        self.abr_artefact_ch2_monitor_widget.setBackground('k')
 
         # Set the title
         self.abr_pos_audio_monitor_widget.setTitle('positive clicks')
         self.abr_neg_audio_monitor_widget.setTitle('negative clicks')
         self.abr_neural_ch0_monitor_widget.setTitle('ch0 ABR')
-        self.abr_artefact_ch0_monitor_widget.setTitle('ch0 artefact')
         self.abr_neural_ch2_monitor_widget.setTitle('ch2 ABR')
-        self.abr_artefact_ch2_monitor_widget.setTitle('ch2 artefact')
         
         # Set the ylabel
         self.neural_plot_widget.setLabel('left', 'neural signal (uV)')
@@ -493,11 +527,7 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
             0, self.abr_audio_monitor_yrange_uV) # abslog scale
         self.abr_neural_ch0_monitor_widget.setYRange(
             -self.abr_neural_yrange_uV, self.abr_neural_yrange_uV)
-        self.abr_artefact_ch0_monitor_widget.setYRange(
-            -self.abr_neural_yrange_uV, self.abr_neural_yrange_uV)
         self.abr_neural_ch2_monitor_widget.setYRange(
-            -self.abr_neural_yrange_uV, self.abr_neural_yrange_uV)
-        self.abr_artefact_ch2_monitor_widget.setYRange(
             -self.abr_neural_yrange_uV, self.abr_neural_yrange_uV)
     
     def initalize_plot_handles(self):
@@ -548,9 +578,7 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         self.abr_audio_monitor_pos_handle_l = []
         self.abr_audio_monitor_neg_handle_l = []
         self.abr_ch0_handle_l = []
-        self.artefact_ch0_handle_l = []
         self.abr_ch2_handle_l = []
-        self.artefact_ch2_handle_l = []
         for n_amplitude, amplitude_label in enumerate(self.amplitude_labels):
             # Positive clicks
             handle = self.abr_pos_audio_monitor_widget.plot(
@@ -573,26 +601,12 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
                 )
             self.abr_ch0_handle_l.append(handle)
 
-            # Artefacts ch0
-            handle = self.abr_artefact_ch0_monitor_widget.plot(
-                x=[], y=[],
-                pen=(n_amplitude, len(self.amplitude_labels))
-                )
-            self.artefact_ch0_handle_l.append(handle)
-
             # ABRs ch2
             handle = self.abr_neural_ch2_monitor_widget.plot(
                 x=[], y=[],
                 pen=(n_amplitude, len(self.amplitude_labels))
                 )
             self.abr_ch2_handle_l.append(handle)
-
-            # Artefacts ch2
-            handle = self.abr_artefact_ch2_monitor_widget.plot(
-                x=[], y=[],
-                pen=(n_amplitude, len(self.amplitude_labels))
-                )
-            self.artefact_ch2_handle_l.append(handle)
     
     def start(self):
         # Start the timer that will continuously update
@@ -627,8 +641,10 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         # And emptied from the left by ThreadedFileWriter, which won't empty
         #   it below a certain minimum length
         # We can't get more than minimum deq_length
-        if needed_chunks > self.abr_device.tfw.minimum_deq_length:
-            needed_chunks = self.abr_device.tfw.minimum_deq_length
+        if self.abr_device.tfw is not None:
+            # This guard is needed because we don't have a dummy TFW yet
+            if needed_chunks > self.abr_device.tfw.minimum_deq_length:
+                needed_chunks = self.abr_device.tfw.minimum_deq_length
 
         # We can't get more data than there is available
         n_chunks_available = len(self.abr_device.tsr.deq_data)
@@ -657,7 +673,19 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         # Concat the data
         big_data = np.concatenate(data_chunk_l)
         headers_df = pandas.DataFrame.from_records(data_header_l)
+
         
+        ## Alternative, unused code for getting data
+        #~ # Get from tfw
+        #~ if self.abr_device.tfw.big_data is None:
+            #~ return None, None, None
+        
+        #~ big_data = self.abr_device.tfw.big_data[
+            #~ :self.abr_device.tfw.big_data_last_col]
+        #~ headers_df = pandas.DataFrame.from_records(self.abr_device.tfw.headers_l)
+        
+        
+        ## Get data in real physical units
         # Convert to uV
         big_data = big_data * 9e6 / 2**24 # right?
         
@@ -753,6 +781,7 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         self.setup_plot_graphics()
         times.append(('setup_plot_graphics done', datetime.datetime.now()))
         
+        
         ## Get data (now in uV)
         # This takes a while - 40 ms max
         big_data, headers_df, t_values = self.get_data()
@@ -776,6 +805,7 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         
         times.append(('data gotten 2', datetime.datetime.now()))
         
+        
         ## Bandpass neural
         # Each of these filters can take 20 ms * n_channels
         nyquist_freq = self.abr_device.sampling_rate / 2
@@ -787,6 +817,7 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         neural_data_hp = scipy.signal.filtfilt(ahi, bhi, neural_data, axis=0)
 
         times.append(('first hp', datetime.datetime.now()))
+        
         
         ## Bandpass heartbeat
         # TODO: hardcoded to ch0, make this selectable
@@ -925,115 +956,106 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
 
         times.append(('neural triggered', datetime.datetime.now()))
 
-        ## Identify outlier trials
-        # Figure out how to handle this in the case that ch2 might be noise
-        
-        #~ # How much to keep
-        #~ quantile = 1
-
-        #~ # Identify trials in the top quantile of abs().max() and std()
-        #~ vals1 = triggered_neural.abs().max(1)
-        #~ thresh1 = vals1.quantile(quantile)
-        #~ mask1 = vals1 > thresh1
-
-        #~ vals2 = triggered_neural.std(1)
-        #~ thresh2 = vals2.quantile(quantile)
-        #~ mask2 = vals2 > thresh2
-
-        #~ # Combine the masks
-        #~ mask = mask1 | mask2
-        #~ outlier_trials = triggered_neural.index[mask]
-        
-        outlier_trials = []
-        
 
         ## Aggregate
-        # Average by condition after dropping outlier trials
-        avg_by_condition = triggered_neural.drop(outlier_trials).groupby(
+        # Average by condition
+        avg_by_condition = triggered_neural.groupby(
             ['polarity', 'amplitude']).mean()
 
         # Average out polarity
         avg_abrs = avg_by_condition.groupby('amplitude').mean()
 
-        # Compare polarities to measure speaker artefact
-        try:
-            avg_arts = avg_by_condition.loc[True] - avg_by_condition.loc[False]
-        except KeyError:
-            avg_arts = None
-
         # Average audio by condition
         avg_audio_by_condition = triggered_ad.groupby(['amplitude', 'polarity']).mean()
-
-
         times.append(('aggregation done', datetime.datetime.now()))
 
-        ## Plot everything by amplitude
-        # This plotting block takes 27 ms
-        for n_amplitude, amplitude in enumerate(triggered_ad.index.levels[0]):
-            # Plot neg clicks
-            try:
-                topl = avg_audio_by_condition.loc[amplitude].loc[False].copy()
-                
-                # Abslog it
-                topl = topl.abs()
-                topl = np.log10(topl)
-                topl[topl < 0] = 0
-                
-                self.abr_audio_monitor_neg_handle_l[n_amplitude].setData(
-                    x=topl.index,
-                    y=topl.values)
-            except KeyError:
-                pass
 
-            # Plot pos clicks
-            try:
-                topl = avg_audio_by_condition.loc[amplitude].loc[True].copy()
-                
-                # Abslog it
-                topl = topl.abs()
-                topl = np.log10(topl)                
-                topl[topl < 0] = 0
-                
-                self.abr_audio_monitor_pos_handle_l[n_amplitude].setData(
-                    x=topl.index,
-                    y=topl.values)
-            except KeyError:
-                pass
-            
-            # Plot ABR ch0
-            try:
-                self.abr_ch0_handle_l[n_amplitude].setData(
-                    avg_abrs.loc[amplitude].loc[0])
-            except KeyError:
-                pass
+        ## Estimate noise level
+        # We estimate noise for each amplitude separately, and then mean
+        # them together.
+        ch0_noise = avg_abrs.loc[:, 0].loc[:, -40:-19].std(axis=1).mean()
+        ch2_noise = avg_abrs.loc[:, 2].loc[:, -40:-19].std(axis=1).mean()
 
-            # Plot artefact ch0
-            if avg_arts is not None:
-                try:
-                    self.artefact_ch0_handle_l[n_amplitude].setData(
-                        avg_arts.loc[amplitude].loc[0])
-                except KeyError:
-                    pass            
-
-            # Plot ABR ch2
-            try:
-                self.abr_ch2_handle_l[n_amplitude].setData(
-                    avg_abrs.loc[amplitude].loc[2])
-            except KeyError:
-                pass
-
-            # Plot artefact ch2
-            if avg_arts is not None:
-                try:
-                    self.artefact_ch2_handle_l[n_amplitude].setData(
-                        avg_arts.loc[amplitude].loc[2])
-                except KeyError:
-                    pass 
+        self.label_abr_ch0_noise.setText('{:.2f} uV'.format(ch0_noise))
+        self.label_abr_ch2_noise.setText('{:.2f} uV'.format(ch2_noise))
         
+
+        ## Plot clicks by amplitude
+        # First abslog avg_audio_by_condition for display
+        avg_audio_by_condition = np.log10(np.abs(avg_audio_by_condition))
+        avg_audio_by_condition[avg_audio_by_condition < 0] = 0
+        
+        # Reindex by amplitudes that should exist so things line up
+        avg_audio_by_condition = avg_audio_by_condition.reindex(
+            triggered_ad.index.levels[0], level='amplitude')
+        
+        # Separate negatives and positives
+        # Can be None if we haven't had any yet (eg, at beginning)
+        try:
+            neg_clicks = avg_audio_by_condition.xs(False, level='polarity')
+        except KeyError:
+            neg_clicks = None
+        
+        try:
+            pos_clicks = avg_audio_by_condition.xs(True, level='polarity')
+        except KeyError:
+            pos_clicks = None
+
+        # Plot negatives
+        if neg_clicks is not None:
+            zobj = zip(self.abr_audio_monitor_neg_handle_l, neg_clicks.values)
+            for handle, topl in zobj:
+                handle.setData(
+                    x=avg_audio_by_condition.columns.values, y=topl)
+
+        # Plot positives
+        if pos_clicks is not None:
+            zobj = zip(self.abr_audio_monitor_pos_handle_l, pos_clicks.values)
+            for handle, topl in zobj:
+                handle.setData(
+                    x=avg_audio_by_condition.columns.values, y=topl)
+        
+        
+        ## Plot ABR by amplitude
+        # Reindex by amplitudes that should exist so things line up
+        avg_abrs = avg_abrs.reindex(
+            triggered_ad.index.levels[0], level='amplitude')
+        
+        # Plot ch0
+        abr_ch0 = avg_abrs.loc[:, 0]
+        zobj = zip(self.abr_ch0_handle_l, abr_ch0.values)
+        for handle, topl in zobj:
+            handle.setData(x=abr_ch0.columns.values, y=topl)
+
+        # Plot ch2
+        abr_ch2 = avg_abrs.loc[:, 2]
+        zobj = zip(self.abr_ch2_handle_l, abr_ch2.values)
+        for handle, topl in zobj:
+            handle.setData(x=abr_ch2.columns.values, y=topl)
+
+        
+        ## Print debug timing information
         times.append(('done', datetime.datetime.now()))
-        times = pandas.DataFrame.from_records(times)
-        times['diff'] = times.iloc[:, 1].diff().dt.total_seconds()
-        #print(times)
+        times = pandas.DataFrame.from_records(times, columns=['event', 't'])
+        times['diff'] = times['t'].diff().dt.total_seconds()
+        
+        # Store total time taken
+        self.update_time_taken = times['diff'].sum()
+        self.label_plot_time_required.setText(
+            '{:.1f} ms'.format(self.update_time_taken * 1000))
+        
+        # Average over times
+        self.times_l.append(times)
+        concatted = pandas.concat(
+            self.times_l, 
+            keys=range(len(self.times_l)), 
+            names=['rep'])
+        meaned = concatted.groupby('event')['diff'].mean()
+
+        # More verbose output
+        if self.print_timing_information:
+            print(meaned)
+            print(meaned.sum())
 
 class MainWindow(PyQt5.QtWidgets.QMainWindow):
     def __init__(self, update_interval_ms=100, experimenter='mouse'):
@@ -1051,12 +1073,21 @@ class MainWindow(PyQt5.QtWidgets.QMainWindow):
         
         
         ## Create objects here that would actually do the work, tfw etc
-        self.abr_device = ABR_Device.ABR_Device()
+        self.abr_device = ABR_Device.ABR_Device(
+            verbose=True, 
+            serial_port='/dev/ttyACM0', 
+            serial_baudrate=115200, 
+            serial_timeout=0.1,
+            abr_data_path='/home/mouse/mnt/cuttlefish/surgery/abr_data',
+            data_in_memory_duration_s=60,
+            experimenter=self.experimenter,
+            )        
         
-        # Pass along needed params to ABR_Device
-        self.abr_device.experimenter = experimenter
-        
-        
+        # Keep track of whether abr_device is running (to avoid multiple
+        # clicks on the start button)
+        self.experiment_running = False
+
+
         ## Create a timer to check for any uncaught errors
         self.timer_check_for_errors = PyQt5.QtCore.QTimer(self)
         
@@ -1099,14 +1130,14 @@ class MainWindow(PyQt5.QtWidgets.QMainWindow):
         system_control_layout = PyQt5.QtWidgets.QHBoxLayout(self) 
         container_layout.addLayout(system_control_layout)
 
-        # Create self.start_button
+        # Create buttons
+        self.set_up_replay_button()
         self.set_up_start_button()
-        
-        # Create self.start_button
         self.set_up_stop_button()
         
-        # Creating vertical layout for start and stop buttons
+        # Creating vertical layout for buttons
         start_stop_layout = PyQt5.QtWidgets.QVBoxLayout()
+        start_stop_layout.addWidget(self.replay_button)
         start_stop_layout.addWidget(self.start_button)
         start_stop_layout.addWidget(self.stop_button)        
         
@@ -1142,20 +1173,38 @@ class MainWindow(PyQt5.QtWidgets.QMainWindow):
             PyQt5.QtWidgets.QLabel('packets in memory'), 3, 0)
         row_session_boxes.addWidget(self.label_packets_in_memory, 3, 1)
 
+        # Param: n_late_reads
+        self.label_n_late_reads = PyQt5.QtWidgets.QLabel('')
+        row_session_boxes.addWidget(
+            PyQt5.QtWidgets.QLabel('# late reads'), 4, 0)
+        row_session_boxes.addWidget(self.label_n_late_reads, 4, 1)
+
 
         ## Set the size and title of the main window
         # Title
         self.setWindowTitle('ABR')
         
         # Size in pixels (can be used to modify the size of window)
-        self.resize(1200, 800)
-        self.move(100, 100)
+        self.resize(1200, 900)
+        self.move(10, 10)
         
         # Show it
         self.show()
 
+    def set_up_replay_button(self):
+        """Create a replay button and connect to self.replay"""
+        # Create button
+        self.replay_button = PyQt5.QtWidgets.QPushButton("Replay Session")
+        
+        # Set style
+        self.replay_button.setStyleSheet(
+            "background-color : green; color: white;") 
+
+        # Start the abr_device and the updates
+        self.replay_button.clicked.connect(self.replay)        
+    
     def set_up_start_button(self):
-        """Create a start button and connect to self.start_sequence"""
+        """Create a start button and connect to self.start"""
         # Create button
         self.start_button = PyQt5.QtWidgets.QPushButton("Start Session")
         
@@ -1167,7 +1216,7 @@ class MainWindow(PyQt5.QtWidgets.QMainWindow):
         self.start_button.clicked.connect(self.start)
 
     def set_up_stop_button(self):
-        """Create a start button and connect to self.start_sequence"""
+        """Create a stop button and connect to self.stop"""
         # Create button
         self.stop_button = PyQt5.QtWidgets.QPushButton("Stop Session")
         
@@ -1234,11 +1283,57 @@ class MainWindow(PyQt5.QtWidgets.QMainWindow):
             # Stop
             self.stop()
 
-    def start(self):
+    def replay(self):
+        """Replay a previous session
+        
+        This function is called when the replay button is clicked.
+        The user will be asked to choose a binary file in a QFileDialog,
+        and then this is passed to `start`.
+        """
+        # Get a folder
+        replay_filename = PyQt5.QtWidgets.QFileDialog.getOpenFileName(
+            self,
+            "Choose a binary file", 
+            #"/home/mouse/mnt/cuttlefish/surgery/abr_data", 
+            os.path.expanduser('~/mnt/cuttlefish/abr/LVdata/250109/BG/'),
+            "Binary Files (*.bin)",
+            )[0]
+        
+        # Call start using that filename
+        self.start(replay_filename=replay_filename)
+
+    def start(self, checkable_state=None, replay_filename=None):
         """Start a session
         
-        Called when start button is clicked
+        This function is called when start button is clicked, or indirectly
+        when the replay button is clicked.
+        
+        replay_filename : str or None
+            If this is a path to an existing binary file, then self.abr_device
+            will replay that file. If that file does not work for some reason, 
+            an error is raised.
+            
+            If this is None, then self.abr_device will collect new data.
+        
+        Workflow
+        * The current value of the "experimenter" line edit is used to set
+            the experimenter parameter in self.abr_device, which in turn 
+            determines where the data is stored.
+        * The individual widgets are started:
+            self.abr_device.start_session (using replay_filename)
+            self.oscilloscope_widget.start
+            self.timer_update.start
         """
+        ## Warn if already runing
+        if self.experiment_running:
+            print(
+                'error: you clicked start but the experiment '
+                'is already running')
+            return
+        self.experiment_running = True
+        
+
+        ## Set self.experimenter based on self.line_edit_experimenter.text()
         # Get the current value of experimenter
         # This line_edit is not queried at any other time, only at the time
         # the session is started, so don't try to use it for other things 
@@ -1254,19 +1349,21 @@ class MainWindow(PyQt5.QtWidgets.QMainWindow):
         # Store self.experimenter
         self.experimenter = text       
         
-        # Also update ABR_Device, which is what actually uses this value
+        # Also update in self.abr_device
         self.abr_device.experimenter = self.experimenter
         
+        
+        ## Start stuff
         # TODO: Handle the case where the abr_device doesn't actually start
         # because it's not ready
-        self.abr_device.start_session()
+        self.abr_device.start_session(replay_filename=replay_filename)
 
         # Start plot widgets
         # TODO: consider controlling their timers in this object
         self.oscilloscope_widget.start()
         
         # Start updating MainWindow (such as System Control)
-        self.timer_update.start()
+        self.timer_update.start(self.update_interval_ms)
 
     def stop(self):
         """Called when we want to stop everything
@@ -1274,10 +1371,17 @@ class MainWindow(PyQt5.QtWidgets.QMainWindow):
         Can happen because stop button was clicked, or because an error
         occurred.
         """
+        # Stop the ABR device (serial port, etc)
         self.abr_device.stop_session()
+        
+        # Stop updating the scope widgets
         self.oscilloscope_widget.stop()
         
+        # Stop updating the main window
         self.timer_update.stop()
+        
+        # Set to False so we can start the session again
+        self.experiment_running = False
 
     def update(self):
         # Set data labels
@@ -1290,6 +1394,10 @@ class MainWindow(PyQt5.QtWidgets.QMainWindow):
 
             self.label_packets_in_memory.setText(str(
                 len(self.abr_device.tsr.deq_data)))
+            
+            self.label_n_late_reads.setText(str(
+                self.abr_device.tsr.late_reads))
+            
         
         #~ self.label_data_written_s = str(
             #~ len(self.abr_device.tfw.n_chunks_written) * 500 / 16000)

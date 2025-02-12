@@ -71,7 +71,7 @@ def parse_data(data_bytes, number_channels, number_samples):
     total_packet_size = 15 + number_channels * number_samples
     n_complete_packets = len(data) // total_packet_size
     if len(data) / total_packet_size != n_complete_packets:
-        print("warning: data length was not a multiple of packet length")
+        print("warning: data length was {}, not a multiple of packet length".format(len(data)))
         data = data[:total_packet_size * n_complete_packets]
 
     # Reshape into packets -- one packet (4015 bytes) per row
