@@ -51,7 +51,7 @@ class ABR_Device(object):
         ## Store parameters
         # Currently not supported to change the sampling rate or gains
         self.sampling_rate = 16000
-        self.gains = [24, 1, 24, 1, 1, 1, 1, 1] # must be list to be json
+        self.gains = [24, 1, 24, 1, 24, 1, 1, 1] # must be list to be json
 
         # Control verbosity
         self.verbose = verbose
@@ -697,6 +697,9 @@ class ThreadedSerialReader(object):
         
         # Log
         self.n_packets_read += 1
+        
+        #if self.n_packets_read == 10:
+        #    time.sleep(.5)
 
     def capture(self):
         """Target of the thread

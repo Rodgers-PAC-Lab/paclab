@@ -47,10 +47,12 @@ def load_recording(recording_directory):
     header_df = pandas.read_table(header_file, sep=',')
 
     # Extract packet number and unwrap it
-    packet_number = np.unwrap(header_df['packet_num'], period=256)
+    header_df['packet_num_unwrapped'] = np.unwrap(
+        header_df['packet_num'], period=256)
 
-    # Assert no tearing
-    assert (np.diff(packet_number) == 1).all()
+    # Warn if tearing
+    if np.any(np.diff(header_df['packet_num_unwrapped']) != 1):
+        print('warning: data is torn')
 
     
     ## Load raw data
