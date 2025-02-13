@@ -77,16 +77,30 @@ def load_session(octopilot_root, octopilot_session_name):
 
 
     ## Load behavior data
-    sounds = pandas.read_table(
-        os.path.join(octopilot_session_dir, 'sounds.csv'), sep=',')
-    sound_plans = pandas.read_table(
-        os.path.join(octopilot_session_dir, 'sound_plans.csv'), sep=',')
-    trials = pandas.read_table(
-        os.path.join(octopilot_session_dir, 'trials.csv'), sep=',')
-    pokes = pandas.read_table(
-        os.path.join(octopilot_session_dir, 'pokes.csv'), sep=',')
-    flashes = pandas.read_table(
-        os.path.join(octopilot_session_dir, 'flashes.csv'), sep=',', header=None)
+    # Klooge
+    if os.path.exists(os.path.join(octopilot_session_dir, 'trials.csv.fixed')):
+        sounds = pandas.read_table(
+            os.path.join(octopilot_session_dir, 'sounds.csv.fixed'), sep=',')
+        sound_plans = pandas.read_table(
+            os.path.join(octopilot_session_dir, 'sound_plans.csv'), sep=',')
+        trials = pandas.read_table(
+            os.path.join(octopilot_session_dir, 'trials.csv.fixed'), sep=',')
+        pokes = pandas.read_table(
+            os.path.join(octopilot_session_dir, 'pokes.csv.fixed'), sep=',')
+        flashes = pandas.read_table(
+            os.path.join(octopilot_session_dir, 'flashes.csv'), sep=',', header=None)
+    
+    else:
+        sounds = pandas.read_table(
+            os.path.join(octopilot_session_dir, 'sounds.csv'), sep=',')
+        sound_plans = pandas.read_table(
+            os.path.join(octopilot_session_dir, 'sound_plans.csv'), sep=',')
+        trials = pandas.read_table(
+            os.path.join(octopilot_session_dir, 'trials.csv'), sep=',')
+        pokes = pandas.read_table(
+            os.path.join(octopilot_session_dir, 'pokes.csv'), sep=',')
+        flashes = pandas.read_table(
+            os.path.join(octopilot_session_dir, 'flashes.csv'), sep=',', header=None)
 
     # Rename this one to indicate that it is the time the message was
     # sent about the sound, which is definitely not the time it played
