@@ -134,7 +134,7 @@ def plot_example_frame(
     """
     # Default edge_names
     if edge_names is None:
-        if 'R thigh' in frame_tracks.index:
+        if frame_tracks is not None and 'R thigh' in frame_tracks.index:
             # Old syntax
             edge_names = [
                 ['mid_back', 'tail_base'],
