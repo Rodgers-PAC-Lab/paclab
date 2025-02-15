@@ -7,6 +7,39 @@ import matplotlib.pyplot as plt
 import my
 import my.plot
 
+def form_analog_filename(analog_root, analog_session, experiment_number=1, 
+    recording_number=1):
+    """Form the full path to the analog file
+    
+    This function contains the defaults that usually work for analog data
+    collected by the eCube. 
+    
+    analog_root: path
+        Should end in 'd_drive'
+    
+    analog_session: str
+        Should correspond to a session name within analog_root
+    
+    experiment_number, recording_number : int
+        These are usually 1 but can be other numbers depending on how you
+        clicked play and record in OpenEphys
+    
+    Returns : analog_packed_filename
+        A full path to continuous.dat file
+    """
+    analog_packed_filename = os.path.join(
+        analog_root, 
+        analog_session, 
+        'Record Node 107', 
+        f'experiment{experiment_number}', 
+        f'recording{recording_number}', 
+        'continuous',
+        'eCube_Server-105.0', 
+        'continuous.dat',
+        )    
+    
+    return analog_packed_filename
+
 def load_analog_data(analog_packed_filename):
     """Check filesize on analog_packed_filename and return memmap
     
