@@ -1,6 +1,19 @@
 """Functions for syncing different types of data
 
 Some convenience functions have been moved here from my.syncing
+---
+extract_onsets_and_durations - Get the start time and duration of pulses
+    in a signal
+drop_refrac - drop onsets too close together
+extract_duration_of_onsets, extract_duration_of_onsets2 - two methods
+    of getting the duration, and dropping conflicting onsets
+longest_unique_fit - find the alignment between two sets of onsets
+
+Functions for parsing our type of data
+---
+get_trial_start_times - Get the trial start times and durations from
+    an analog trial start signal. 
+get_actual_sound_times - Get the sound times from a speaker signal
 """
 
 import scipy.signal
