@@ -52,7 +52,8 @@ def load_session(octopilot_root, octopilot_session_name):
         
         'trials': DataFrame
             One row per trial.
-            Columns: 'trial_number', 'start_time', 'goal_port', 'trigger',
+            Index: trial_number
+            Columns: 'start_time', 'start_time_s', 'goal_port', 'trigger',
                'reward_time'
             Other columns may be included depending on the stimulus set.
             
@@ -110,6 +111,9 @@ def load_session(octopilot_root, octopilot_session_name):
     # TODO: fix this missing header
     flashes.columns = ['trial_number', 'rpi', 'flash_time']
 
+    # Index trials by trial_number
+    trials = trials.set_index('trial_number')
+
     # Coerce
     flashes['flash_time'] = flashes['flash_time'].apply(str2dt)
     sounds['message_time'] = sounds['message_time'].apply(str2dt)
@@ -123,6 +127,10 @@ def load_session(octopilot_root, octopilot_session_name):
     # It doesn't really matter whether this is the same time on all of the
     # other pis. This is just a point of reference to convert datetimes to floats
     session_start_time = trials['start_time'].iloc[0]
+
+    # Define time in session
+    trials['start_time_s'] = (
+        trials['start_time'] - session_start_time).dt.total_seconds()
 
     # Convert datetimes to time in seconds since session_start_time
     sounds['message_time_s'] = (
