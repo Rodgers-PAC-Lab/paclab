@@ -736,3 +736,131 @@ def sync_behavior_to_analog(
         'video_duration': video_duration,
         'resids': resids,
         }
+
+def fit_analog_flash_to_behavior_flash(
+    trials, 
+    flash_time_behavior_s,
+    flash_time_analog_s,
+    std_resids_thresh=0.001,
+    max_resids_thresh=0.01,
+    ):
+    """Fit behavior to analog
+    
+    trials : DataFrame, indexed by trial_number
+    
+    flash_time_behavior_s : Series, indexed by trial number
+        The flash time reported by the rpi that we recorded in the analog data.
+        These times should be in the behavioral timebase: seconds since
+        the start of the first trial, on that pi.
+        If this doesn't align with the `trials` exactly, a warning is issued.
+    
+    flash_time_analog_s : array
+        The flash time recorded in the analog data, in seconds since
+        the beginning of the analog recording.
+        This must have either the same length as `trials` or one greater than
+        the length of `triasl`.
+    
+    std_resids_thresh, max_resids_thresh : numeric
+        If the fit residuals exceed these metrics, a warning is printed
+    
+    Workflow:
+    * Store flash_time_analog_s as trials['flash_time_analog_s']
+        Since we have no trial number information in this array, we assume
+        that the first recorded analog flash is the first trial. The last
+        recorded analog flash must be the last behavioral trial or one after
+        the last behavioral trial (in case that behavioral trial was incomplete
+        and therefore missing from `trials`.)
+    * Store flash_time_behavior_s as trials['flash_time_behavior_s'].
+        If it doesn't align perfectly, a warning is issued and those trials
+        are dropped.
+    * Fit between trials['flash_time_analog_s'] and 
+        trials['flash_time_behavior_s']. This tells us the relationship
+        between analog time and behavior time on the recorded rpi. For now,
+        we have to assume that all other rpis have the same behavioral timebase,
+        which is only true up to the limits of chrony. Eventually, we need
+        to replace this with some kind of hardware measurement on each pi.
+    
+    Empirically, the fit had a stdev of 0.7 ms with autopilot and 0.3 ms
+    with octopilot. This is presumably set by DIO jitter.
+    TODO: try RPi.GPIO here instead
+    TODO: loopback on the trial_start pin, to upper bound how long it takes    
+    
+    Returns: dict, with keys
+        'trials': new version of trials with the columns above added
+            and potentially rows dropped
+        'b2a_slope', 'b2a_intercept': the fit from behavior to analog
+    """
+    ## Make a copy
+    trials = trials.copy()
+    
+    
+    ## First, store the analog trial start times in `trials`
+    # TODO: replace this with longest_unique_fit on trials['start_time'], 
+    # in case the analog recording is incomplete
+    # For now, we assume that analog data includes all trials.
+    
+    if len(trials) == len(flash_time_analog_s):
+        # One behavior trial per analog start
+        trials['flash_time_analog_s'] = flash_time_analog_s
+
+    elif len(trials) == len(flash_time_analog_s) - 1:
+        # One fewer behavior trial than analog trial
+        # This is not uncommon, because the last behavior trial is often 
+        # incomplete, meaning it won't appear in trial_data
+        trials['flash_time_analog_s'] = flash_time_analog_s[:-1]
+
+    else:
+        print('error: {} behavior trials but {} analog trials'.format(
+            len(trials), len(flash_time_analog_s)))
+    
+    
+    ## Next, store the reported flash times in `trials`
+    trials = trials.join(
+        flash_time_behavior_s.rename('flash_time_behavior_s'))
+    
+    # Warn on any null
+    # TODO: does this ever actually happen?
+    null_mask = trials['flash_time_behavior_s'].isnull()
+    if null_mask.any():
+        print(
+            'warning: dropping trials {} without behavioral flash time'.format(
+            null_mask.index[null_mask.values]))
+        trials = trials.dropna(subset=['flash_time_behavior_s'])
+
+    
+    ## Do the fit
+    # TODO: replace with longest_unique_fit
+    behavior2analog_fit_rpi01 = scipy.stats.linregress(
+        trials['flash_time_behavior_s'].values, 
+        trials['flash_time_analog_s'].values,
+        )
+    
+    
+    ## Calculate the residuals
+    analog_pred_from_behavior = np.polyval(
+        [behavior2analog_fit_rpi01.slope, behavior2analog_fit_rpi01.intercept], 
+        flash_time_behavior_s.values)
+    resids = flash_time_analog_s - analog_pred_from_behavior
+
+    # Warn if these metrics are broken
+    std_resids = np.std(resids)
+    if std_resids > std_resids_thresh:
+        print(
+            f'warning: stdev(behavior2analog resids) is {std_resids}, '
+            f'exceeding thresh of {std_resids_thresh}'
+            )
+
+    max_resids = np.max(np.abs(resids))
+    if max_resids > max_resids_thresh:
+        print(
+            f'warning: absmax(behavior2analog resids) is {max_resids}, '
+            f'exceeding thresh of {max_resids_thresh}'
+            )
+    
+    
+    ## Return
+    return {
+        'trials': trials,
+        'b2a_slope': behavior2analog_fit_rpi01.slope,
+        'b2a_intercept': behavior2analog_fit_rpi01.intercept,
+        }
