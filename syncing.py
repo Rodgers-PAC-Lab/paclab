@@ -18,7 +18,6 @@ get_actual_sound_times - Get the sound times from a speaker signal
 
 import scipy.signal
 import scipy.stats
-import my
 import pandas
 import paclab
 import numpy as np
@@ -451,7 +450,7 @@ def get_video_start_time(video_save_signal, multiple_action='error'):
     # 10.0V = 32768 (I think?), so 3.3V = 10813
     # Take the first sample that exceeds roughly half that
     trig_time_a, trig_duration_a = (
-        my.syncing.extract_onsets_and_durations(
+        extract_onsets_and_durations(
         video_save_signal, delta=5000, verbose=False, maximum_duration=np.inf))
     
     if len(trig_time_a) != 1:
@@ -489,7 +488,7 @@ def get_recording_start_time(trig_signal, multiple_action='error'):
     # There is a pulse about 6000 samples long at the very beginning, which I
     # think is when the nosepoke is initialized
     trig_time_a, trig_duration_a = (
-        my.syncing.extract_onsets_and_durations(
+        extract_onsets_and_durations(
         trig_signal, delta=5000, verbose=False, maximum_duration=5000))
     
     if len(trig_time_a) != 1:
