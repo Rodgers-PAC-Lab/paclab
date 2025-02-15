@@ -856,7 +856,7 @@ def fit_analog_flash_to_behavior_flash(
             f'warning: absmax(behavior2analog resids) is {max_resids}, '
             f'exceeding thresh of {max_resids_thresh}'
             )
-    
+
     
     ## Return
     return {
@@ -864,3 +864,29 @@ def fit_analog_flash_to_behavior_flash(
         'b2a_slope': behavior2analog_fit_rpi01.slope,
         'b2a_intercept': behavior2analog_fit_rpi01.intercept,
         }
+
+def compose_fit(p1, p2):
+    """Return a linear poly p3 s.t. p3(x) = p1(p2(x))
+    
+    p1, p2 : array-like of length 2
+        Slope is always first, intercept always last
+    
+    Returns: array of length 2
+    """
+    return np.array([
+        p1[0] * p2[0], # m1 * m2
+        p1[0] * p2[1] + p1[1], # m1 * b2 + b1
+        ])
+
+def invert_fit(p):
+    """Return a linear poly q such that q(p(x)) = x
+    
+    p : array-like of length 2
+        Slope is always first, intecept always last
+    
+    Returns: array of length 2
+    """
+    return np.array([
+        1 / p[0], # slope
+        -p[1] / p[0], # intercept
+        ])
