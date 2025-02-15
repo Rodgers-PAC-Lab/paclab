@@ -2,6 +2,7 @@
 
 import os
 import numpy as np
+import pandas
 import scipy
 import matplotlib.pyplot as plt
 import my
@@ -264,3 +265,54 @@ def make_plot(
         'ax': ax,
         'data': got_data,
         }
+
+def load_spike_clusters(sort_dir):
+    """Load the cluster of each spike from kilosort data
+    
+    This includes any reclustering that was done in phy
+    """
+    spike_cluster = np.load(os.path.join(sort_dir, 'spike_clusters.npy'))
+    return spike_cluster
+
+def load_spikes(sort_dir):
+    """Load spike times from kilosort
+    
+    This is just the data in spike_times.npy, flattened
+    Data is converted to int (in case it is stored as uint64)
+    
+    Returns: 
+        spike_time_samples
+    """
+    spike_time_samples = np.load(
+        os.path.join(sort_dir, 'spike_times.npy')).flatten().astype(int)
+    
+    return spike_time_samples
+
+def load_spike_templates1(sort_dir):
+    """Return spike templates from kilosort
+
+    These are the actual templates that were used, not the templates
+    for each spike. For that, use load_spike_templates2
+    
+    Returns: templates
+        array with shape (n_templates, n_timepoints, n_channels)
+    """
+    templates = np.load(os.path.join(sort_dir, 'templates.npy'))
+    return templates
+
+def load_spike_amplitudes(sort_dir):
+    """Return spike amplitudes from kilosort
+    
+    """
+    # Amplitude of every spike
+    spike_amplitude = np.load(os.path.join(sort_dir, 'amplitudes.npy'))
+    
+    return spike_amplitude.flatten()
+
+def load_cluster_groups(sort_dir):
+    """Returns type (good, MUA, noise) of each cluster from kilosort"""
+    # This has n_manual_clusters rows, with the group for each
+    cluster_group = pandas.read_table(os.path.join(sort_dir, 
+        'cluster_group.tsv'))
+    
+    return cluster_group
