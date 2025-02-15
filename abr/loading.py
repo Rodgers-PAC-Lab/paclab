@@ -123,6 +123,10 @@ def get_metadata(data_directory, datestring, metadata_version):
         csv_filename = os.path.join(
             data_directory,
             datestring + '_notes_v5.csv')
+    elif metadata_version == "v6":
+        csv_filename = os.path.join(
+            data_directory,
+            datestring + '_notes_v6.csv')
     else:
         print("ERROR, Metadata csv not found for " + datestring)
         return
@@ -142,7 +146,7 @@ def get_metadata(data_directory, datestring, metadata_version):
         metadata['ch2_config'] = (metadata['positive_ch3'].str.cat(metadata['negative_ch3']))
         metadata = metadata.rename(columns={"session":"recording"})
         metadata = metadata.drop(['pre_vs_post','positive_electrode','negative_electrode','positive_ch3','negative_ch3'],axis=1)
-    elif metadata_version=='v5':
+    elif metadata_version=='v5' or metadata_version=='v6':
         metadata['recording_name'] = ['{:03d}'.format(n) for n in metadata['recording'].values]
 
     else:
