@@ -109,6 +109,8 @@ def sync_behavior_to_analog(
     ):
     """Sync session
     
+    This is a legacy function that only works with Autopilot style data.
+    
     session_trial_data : from paclab.parse.load_data
     session_sound_data : from paclab.parse.load_data
     h5_filename : full path to hdf5 file
