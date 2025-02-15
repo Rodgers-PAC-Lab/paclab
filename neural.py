@@ -47,90 +47,25 @@ def load_neural_data(neural_packed_filename):
     
     return neural_mm
 
-def get_video_start_time(video_save_signal, multiple_action='error'):
-    """Return the time (in samples) of the video save pulse
-    
-    The video save signal in Room C is frequently incorrect. It's supposed
-    to be high throughout the recording. Instead, it is frequently pulsed
-    high for just 5 ms or so, sometimes multiple times, or never goes
-    high at all. I don't know if the 5 ms pulse actually maps onto the
-    start of the video or not. This might be because the saving command
-    is only guaranteed for the control camera, or something like that.
-    
-    trig_signal : array-like
-        The trigger signal
-    
-    multiple_action : string or None
-        Controls what happens if multiple triggers detected
-        'error': raise ValueError
-        'warn' or 'warning': print warning
-        anything else : do nothing
+def get_video_start_time(*args, **kwargs):
+    # only for deprecations below
+    import paclab.syncing
 
-    Returns: start_times, durations
-        start_times: start time in  samples
-        durations: duration in samples
-            
-        If multiple triggers are detected, they are all returned in an array
-        If only one, then only that one is returned
-    """
-    # Find threshold crossings
-    # 10.0V = 32768 (I think?), so 3.3V = 10813
-    # Take the first sample that exceeds roughly half that
-    trig_time_a, trig_duration_a = (
-        my.syncing.extract_onsets_and_durations(
-        video_save_signal, delta=5000, verbose=False, maximum_duration=np.inf))
-    
-    if len(trig_time_a) != 1:
-        if multiple_action == 'error':
-            raise ValueError("expected 1 trig, got {}".format(len(trig_time_a)))
-        elif multiple_action in ['warn', 'warning']:
-            print("warning: expected 1 trig, got {}".format(len(trig_time_a)))
+    print(
+        'warning: replace all calls to paclab.neural.get_video_start_time '
+        'with paclab.syncing.get_video_start_time instead'
+        )
+    return paclab.syncing.get_video_start_time(*args, **kwargs)
 
-    if len(trig_time_a) == 1:
-        return trig_time_a[0], trig_duration_a[0]
-    else:
-        return trig_time_a, trig_duration_a
+def get_recording_start_time(*args, **kwargs):
+    # only for deprecations below
+    import paclab.syncing
 
-def get_recording_start_time(trig_signal, multiple_action='error'):
-    """Return the time (in samples) of the recording start pulse
-    
-    trig_signal : array-like
-        The trigger signal
-    
-    multiple_action : string or None
-        Controls what happens if multiple triggers detected
-        'error': raise ValueError
-        'warn' or 'warning': print warning
-        anything else : do nothing
-    
-    An error occurs if this trigger is too short or too long
-    
-    If multiple triggers are detected, they are all returned in an array
-    If only one, then only that one is returned
-    """
-    # Find threshold crossings
-    # 10.0V = 32768 (I think?), so 3.3V = 10813
-    # Take the first sample that exceeds roughly half that
-    # We expect trig signal to last 100 ms (I think?), which is 2500 samples
-    # There is a pulse about 6000 samples long at the very beginning, which I
-    # think is when the nosepoke is initialized
-    trig_time_a, trig_duration_a = (
-        my.syncing.extract_onsets_and_durations(
-        trig_signal, delta=5000, verbose=False, maximum_duration=5000))
-    
-    if len(trig_time_a) != 1:
-        if multiple_action == 'error':
-            raise ValueError("expected 1 trig, got {}".format(len(trig_time_a)))
-        elif multiple_action in ['warn', 'warning']:
-            print("warning: expected 1 trig, got {}".format(len(trig_time_a)))
-
-    assert (trig_duration_a > 2495).all()
-    assert (trig_duration_a < 2540).all()
-
-    if len(trig_time_a) == 1:
-        return trig_time_a[0]
-    else:
-        return trig_time_a
+    print(
+        'warning: replace all calls to paclab.neural.get_recording_start_time '
+        'with paclab.syncing.get_recording_start_time instead'
+        )
+    return paclab.syncing.get_recording_start_time(*args, **kwargs)
 
 def make_plot(
     data, ax=None, n_range=None, sampling_rate=20000., 

@@ -339,9 +339,51 @@ def longest_unique_fit(xdata, ydata, start_fitlen=3, ss_thresh=.0003,
     else:
         return best_fitpoly
 
-def get_trial_start_times(trial_start_signal, analog_fs=25000.):
-    """Return the time (in seconds) of each trial start pulse"""
-    # Also parse trial start signals
+def get_trial_start_times(
+    trial_start_signal, 
+    delta=5000,
+    analog_fs=25000.,
+    maximum_duration_samples=10000,
+    verbose=False,
+    ):
+    """Return the time (in seconds) of each trial start pulse
+    
+    The trial start is defined as the onset of a trial start pulse on the
+    trial start signal line in the analog data. This same pulse triggers
+    an LED to flash in the arena.
+    
+    This function is just a wrapper around extract_onsets_and_durations with 
+    defaults that make sense for trial start pulses.
+
+   
+    trial_start_signal : array
+        From the analog data. Units should be bitlevels. 
+    
+    delta : numeric
+        A threshold in bitlevels. For our current settings with the eCube,
+        a 3.3 V signal tends to end up at 11000 bitlevels, which I assume is
+        2 ** 15 * 3.3 / 10. So a `delta` of half that is appropriate.
+    
+    maximum_duration : numeric
+        A maximum duration in samples of a pulse. 
+        Pulses longer than this will be silently dropped.
+        The pulse duration has changed over time, from 100 to 300 ms or so.
+        There is no harm in making this plenty long since erroneously long
+        pulses are rare (?), although this used to happen with Autopilot
+        during the startup sequence.
+        With Octopilot, these pulses are pretty consistently 100 ms long,
+        with stdev 0.3 ms or so.
+    
+    verbose : bool
+        Passed to extract_onsets_and_durations
+    
+    Returns: pulse_time_s, pulse_durations_s
+        Both are arrays of the same length. Both are in units of seconds.
+        An old version of this function used to return only pulse_times_s.
+        pulse_times_s : start times of trials (onset of pulse)
+        pulse_durations_s : duration of each trial start pulse
+    """
+    # Here are some old notes that were relevant only to Autopilot
     # These are currently set to 100 ms, 
     # but on average are 115 ms, and can be up to 150 ms
     # or 250 ms in the case of 2023-12-07_15-37-49
@@ -352,10 +394,18 @@ def get_trial_start_times(trial_start_signal, analog_fs=25000.):
     # The startup pulse is a long one (6254 samples) followed very quickly
     # afterwards by a short one (1702 samples)
     # It seems like we should drop the long one and keep the short one (why?)
-    trial_start_times, trial_start_pulse_duration_a = (
-        my.syncing.extract_onsets_and_durations(
-        trial_start_signal, delta=5000, verbose=False, maximum_duration=5000))
     
+    
+    # Get the start times and durations
+    pulse_times_samples, pulse_durations_samples = (
+        extract_onsets_and_durations(
+        trial_start_signal, 
+        delta=delta, 
+        verbose=verbose, 
+        maximum_duration=maximum_duration_samples,
+        ))
+
+    # More old notes relevant only to autopilot
     #~ # Edge case: I think often the first one is too short
     #~ if trial_start_pulse_duration_a[0] < 2000:
         #~ print("warning: dropping first trial start pulse")
@@ -364,9 +414,97 @@ def get_trial_start_times(trial_start_signal, analog_fs=25000.):
     
     #~ assert (trial_start_pulse_duration_a > 2000).all()
     #~ assert (trial_start_pulse_duration_a < 3800).all()
-    analog_trial_start_times_s = trial_start_times / analog_fs
     
-    return analog_trial_start_times_s
+    # Convert to seconds
+    pulse_times_s = pulse_times_samples / analog_fs
+    pulse_durations_s = pulse_durations_samples / analog_fs
+    
+    return pulse_times_s, pulse_durations_s
+
+def get_video_start_time(video_save_signal, multiple_action='error'):
+    """Return the time (in samples) of the video save pulse
+    
+    The video save signal in Room C is frequently incorrect. It's supposed
+    to be high throughout the recording. Instead, it is frequently pulsed
+    high for just 5 ms or so, sometimes multiple times, or never goes
+    high at all. I don't know if the 5 ms pulse actually maps onto the
+    start of the video or not. This might be because the saving command
+    is only guaranteed for the control camera, or something like that.
+    
+    trig_signal : array-like
+        The trigger signal
+    
+    multiple_action : string or None
+        Controls what happens if multiple triggers detected
+        'error': raise ValueError
+        'warn' or 'warning': print warning
+        anything else : do nothing
+
+    Returns: start_times, durations
+        start_times: start time in  samples
+        durations: duration in samples
+            
+        If multiple triggers are detected, they are all returned in an array
+        If only one, then only that one is returned
+    """
+    # Find threshold crossings
+    # 10.0V = 32768 (I think?), so 3.3V = 10813
+    # Take the first sample that exceeds roughly half that
+    trig_time_a, trig_duration_a = (
+        my.syncing.extract_onsets_and_durations(
+        video_save_signal, delta=5000, verbose=False, maximum_duration=np.inf))
+    
+    if len(trig_time_a) != 1:
+        if multiple_action == 'error':
+            raise ValueError("expected 1 trig, got {}".format(len(trig_time_a)))
+        elif multiple_action in ['warn', 'warning']:
+            print("warning: expected 1 trig, got {}".format(len(trig_time_a)))
+
+    if len(trig_time_a) == 1:
+        return trig_time_a[0], trig_duration_a[0]
+    else:
+        return trig_time_a, trig_duration_a
+
+def get_recording_start_time(trig_signal, multiple_action='error'):
+    """Return the time (in samples) of the recording start pulse
+    
+    trig_signal : array-like
+        The trigger signal
+    
+    multiple_action : string or None
+        Controls what happens if multiple triggers detected
+        'error': raise ValueError
+        'warn' or 'warning': print warning
+        anything else : do nothing
+    
+    An error occurs if this trigger is too short or too long
+    
+    If multiple triggers are detected, they are all returned in an array
+    If only one, then only that one is returned
+    """
+    # Find threshold crossings
+    # 10.0V = 32768 (I think?), so 3.3V = 10813
+    # Take the first sample that exceeds roughly half that
+    # We expect trig signal to last 100 ms (I think?), which is 2500 samples
+    # There is a pulse about 6000 samples long at the very beginning, which I
+    # think is when the nosepoke is initialized
+    trig_time_a, trig_duration_a = (
+        my.syncing.extract_onsets_and_durations(
+        trig_signal, delta=5000, verbose=False, maximum_duration=5000))
+    
+    if len(trig_time_a) != 1:
+        if multiple_action == 'error':
+            raise ValueError("expected 1 trig, got {}".format(len(trig_time_a)))
+        elif multiple_action in ['warn', 'warning']:
+            print("warning: expected 1 trig, got {}".format(len(trig_time_a)))
+
+    assert (trig_duration_a > 2495).all()
+    assert (trig_duration_a < 2540).all()
+
+    if len(trig_time_a) == 1:
+        return trig_time_a[0]
+    else:
+        return trig_time_a
 
 def get_actual_sound_times(speaker_signal, threshhold=50, analog_fs=25000.,
     minimum_duration_ms=5, prefilter_highpass=500, return_as_dict=True,
