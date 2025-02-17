@@ -1,23 +1,31 @@
-# Main script to run ABR session as a GUI
+# Need to have permission to access ACM0
+# sudo adduser mouse dialout
+#
+# run this like:
+#   python3 -m paclab.abr.gui.start_cli
+# or in ipython --pylab=qt:
+#   run -m paclab.abr.gui.start_cli
 
-import sys
-import signal
-import gui
-import PyQt5.QtWidgets
+import numpy as np
+import pandas
+from . import ABR_Device
+import paclab
+import os
 
-# Apparently QApplication needs sys.argv for some reason
-# https://stackoverflow.com/questions/27940378/why-do-i-need-sys-argv-to-start-a-qapplication-in-pyqt
-app = PyQt5.QtWidgets.QApplication(sys.argv)
+# Initalize abr_device
+abr_device = ABR_Device.ABR_Device()
 
-# Make CTRL+C work to close the GUI
-# https://stackoverflow.com/questions/4938723/what-is-the-correct-way-to-make-my-pyqt-application-quit-when-killed-from-the-co
-signal.signal(signal.SIGINT, signal.SIG_DFL)
+# Run
+abr_device.run_session()
 
-# Instantiate a MainWindow
-win = gui.MainWindow()
+# Load data
+loaded_data = paclab.abr.loading.load_recording(
+    os.path.split(abr_device.tfw.output_filename)[0])
 
-# Show it
-win.show()
+config = loaded_data['config']
+header_df = loaded_data['header_df']
+data = loaded_data['data']
 
-# Exit when app exec
-sys.exit(app.exec())   
+if np.any(np.diff(header_df['packet_num_unwrapped']) != 1):
+    print('warning: data is torn')
+    
