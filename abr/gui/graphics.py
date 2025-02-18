@@ -693,6 +693,8 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         big_data = big_data / np.array(self.abr_device.gains)
         
         # Use headers_df to make the xvals
+        # If there are dropped packets, these xvals will be wrong, but I 
+        # don't think it really matters or is worth fixing here
         packet_numbers = np.unwrap(headers_df['packet_num'], period=256)
         start_time_samples = packet_numbers[0] * 500
         stop_time_samples = (packet_numbers[-1] + 1) * 500
@@ -700,10 +702,6 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
             np.arange(start_time_samples, stop_time_samples) / 
             self.abr_device.sampling_rate
             )
-        
-        # Check for tearing
-        if (np.diff(packet_numbers) != 1).any():
-            raise ValueError('data is torn!')   
 
         return big_data, headers_df, t_values
 

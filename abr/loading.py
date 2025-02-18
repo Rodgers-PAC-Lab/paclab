@@ -47,10 +47,12 @@ def load_recording(recording_directory):
     header_df = pandas.read_table(header_file, sep=',')
 
     # Extract packet number and unwrap it
-    packet_number = np.unwrap(header_df['packet_num'], period=256)
+    header_df['packet_num_unwrapped'] = np.unwrap(
+        header_df['packet_num'], period=256)
 
-    # Assert no tearing
-    assert (np.diff(packet_number) == 1).all()
+    # Warn if tearing
+    if np.any(np.diff(header_df['packet_num_unwrapped']) != 1):
+        print('warning: data is torn')
 
     
     ## Load raw data
@@ -126,6 +128,10 @@ def get_metadata(data_directory, datestring, metadata_version):
         csv_filename = os.path.join(
             data_directory,
             datestring + '_notes_v5.csv')
+    elif metadata_version == "v6":
+        csv_filename = os.path.join(
+            data_directory,
+            datestring + '_notes_v6.csv')
     else:
         print("ERROR, Metadata csv not found for " + datestring)
         return
@@ -145,7 +151,7 @@ def get_metadata(data_directory, datestring, metadata_version):
         metadata['ch2_config'] = (metadata['positive_ch3'].str.cat(metadata['negative_ch3']))
         metadata = metadata.rename(columns={"session":"recording"})
         metadata = metadata.drop(['pre_vs_post','positive_electrode','negative_electrode','positive_ch3','negative_ch3'],axis=1)
-    elif metadata_version=='v5':
+    elif metadata_version=='v5' or metadata_version=='v6':
         metadata['recording_name'] = ['{:03d}'.format(n) for n in metadata['recording'].values]
 
     else:

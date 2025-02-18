@@ -56,7 +56,181 @@ def normalize_list_of_channels(ser):
         new_values_l.append(tup)
     
     return new_values_l
+
+def abigail_sheet(drop_long_columns=True):
+    """Load data from '2025-02-15 Abigail neural recordings metadata' into dict
     
+    This is currently a copy of cedric_ad_sheet. Different data cleaning
+    may be required. TODO: Figure out which parts of this code can be shared 
+    between the two.
+    """
+    # Where to look for analog path
+    analog_path = os.path.expanduser('~/mnt/cuttlefish/whitematter/d_drive')
+    
+    # Get URL
+    # The sheet must be visible to anyone with the link
+    # The CSV format doesn't support multiple sheets
+    url = (
+        'https://docs.google.com/spreadsheets/d/' # google prefix
+        '1EDIHYOcQYYXEwoCEpfGCMsPImGwTRgyhQxEr2nClMRs/' # doc ID
+        'export?format=xlsx' # export command
+        )
+    
+
+
+    # Skip these sheets
+    skip_sheets = [
+        'Directories', 'Behavior_mice', 'Corrupted_files', 
+        'Visual_channel_table', 'Mice',
+        ]    
+    
+    # Skip these columns (in normalized case)
+    skip_columns = [
+        'mouse_name', # usually redundant with sheet name
+        'truncate_last_n_samples', # not using anymore?
+        ]
+    
+    # Optionally skip these
+    if drop_long_columns:
+        skip_columns += [
+            'notes', 
+            'broken_on_view', 
+            'broken_channels_based_on_tetrode_notes',
+            ]
+    
+    # Get data
+    request_data = requests.get(url)
+
+    # Parse each sheet into a dict
+    res_d = {}
+    with pandas.ExcelFile(io.BytesIO(request_data.content)) as excel_file:
+        # Iterate over sheets
+        for sheet_name in excel_file.sheet_names:
+            # Skip these
+            if sheet_name in skip_sheets:
+                continue
+            
+            # Read this sheet
+            sheet = pandas.read_excel(excel_file, sheet_name)
+
+            # Fix the column names
+            sheet.columns = [
+                normalize_case_of_string(col) for col in sheet.columns]
+            
+            # Label row numbers starting with 2 to match google sheet
+            sheet.index = sheet.index.values + 2
+            
+            # Store
+            res_d[sheet_name] = sheet
+    
+    # Concatenate along rows
+    # This assume the column names are commensurable!
+    df = pandas.concat(res_d, names=['mouse_name', 'row'])
+    
+    # Drop skip_columns
+    df = df.drop(skip_columns, axis=1, errors='ignore')
+
+    # Set the date column to be a datetime.date instead of a timestamp
+    df['session_date'] = df['session_date'].dt.date
+    
+    # Fix the logger name
+    df['logger'] = df['logger'].replace({
+        'A62': '62BA62',
+        'logger_62BB7C': '62BB7C',
+        'logger_62BA62': '62BA62',
+        })
+    
+    # Fix exclude by making it bool with default False
+    df['exclude'] = df['exclude'].fillna(0)
+    bad_exclude_vals = ~df['exclude'].isin([0, 1])
+    if bad_exclude_vals.any():
+        print(
+            "The following values in 'exclude' need to be replaced with "
+            "True or False: ")
+        print(df['exclude'].loc[bad_exclude_vals])
+        print()
+        
+        # Assume those bad values do need to be excluded
+        df.loc[bad_exclude_vals, 'exclude'] = 1
+    df['exclude'] = df['exclude'].astype(bool)
+    
+    # Fix 'broken_channels_based_on_tetrode_notes'
+    # Make it a tuple of integers, or None
+    if 'broken_channels_based_on_tetrode_notes' in df.columns:
+        df['broken_channels_based_on_tetrode_notes'] = (
+            normalize_list_of_channels(
+            df['broken_channels_based_on_tetrode_notes']))
+    
+    # Fix 'broken_on_view'
+    # Make it a tuple of integers, or None
+    if 'broken_on_view' in df.columns:
+        df['broken_on_view'] = normalize_list_of_channels(
+            df['broken_on_view'])
+
+
+    ## Fix manually sorted by making it bool with default False
+    # First fill null with 0
+    df['manually_sorted'] = df['manually_sorted'].fillna(0)
+    
+    # Now replace the things I know are in there
+    replacing_ser = pandas.Series(
+        {'yes': 1, 'Yes': 1, 'No': 0, 'no': 0, 0: 0, 1: 1, True: 1, False: 0})
+    bad_vals_mask = ~df['manually_sorted'].isin(replacing_ser.index)
+    if bad_vals_mask.any():
+        print(
+            "The following values in 'manually_sorted' need to be replaced with "
+            "True or False: ")
+        print(df['manually_sorted'].loc[bad_vals_mask])
+        print()
+        
+        # Assume those bad values were not manually sorted
+        df.loc[bad_vals_mask, 'manually_sorted'] = 0
+    
+    # Now map
+    df['manually_sorted'] = df['manually_sorted'].map(replacing_ser).astype(bool)
+
+
+    ## Fill recording_number with 1, the default value
+    if 'recording_number' not in df.columns:
+        df['recording_number'] = 1
+    df['recording_number'] = df['recording_number'].fillna(1).astype(int)
+
+
+    ## Figure out analog_packed_filename
+    # Add analog_packed_filename
+    df['analog_packed_filename'] = ''
+    for sta_index in df.index:
+        # Slice data from table
+        analog_session_name = df.loc[sta_index, 'analog_file']
+        if pandas.isnull(analog_session_name):
+            continue
+
+        # Recording number within analog data
+        recording_number = df.loc[
+            sta_index, 'recording_number']
+        recording_number_string = 'recording{}'.format(int(recording_number))
+        
+        # Full path to analog data
+        analog_packed_filename = os.path.join(
+            analog_path, 
+            analog_session_name,
+            'Record Node 107/experiment1',
+            recording_number_string,
+            'continuous/eCube_Server-105.0',
+            'continuous.dat',
+            )
+
+        # Error check it exists
+        assert os.path.exists(analog_packed_filename)
+        
+        # Store
+        df.loc[
+            sta_index, 'analog_packed_filename'] = analog_packed_filename
+
+    
+    return df
+    
+
 def cedric_ad_sheet(drop_long_columns=True):
     """Load data from 'AD Mice Synchronization Table' into dict
     

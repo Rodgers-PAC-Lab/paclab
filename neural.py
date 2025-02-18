@@ -2,10 +2,44 @@
 
 import os
 import numpy as np
+import pandas
 import scipy
 import matplotlib.pyplot as plt
 import my
 import my.plot
+
+def form_analog_filename(analog_root, analog_session, experiment_number=1, 
+    recording_number=1):
+    """Form the full path to the analog file
+    
+    This function contains the defaults that usually work for analog data
+    collected by the eCube. 
+    
+    analog_root: path
+        Should end in 'd_drive'
+    
+    analog_session: str
+        Should correspond to a session name within analog_root
+    
+    experiment_number, recording_number : int
+        These are usually 1 but can be other numbers depending on how you
+        clicked play and record in OpenEphys
+    
+    Returns : analog_packed_filename
+        A full path to continuous.dat file
+    """
+    analog_packed_filename = os.path.join(
+        analog_root, 
+        analog_session, 
+        'Record Node 107', 
+        f'experiment{experiment_number}', 
+        f'recording{recording_number}', 
+        'continuous',
+        'eCube_Server-105.0', 
+        'continuous.dat',
+        )    
+    
+    return analog_packed_filename
 
 def load_analog_data(analog_packed_filename):
     """Check filesize on analog_packed_filename and return memmap
@@ -47,90 +81,25 @@ def load_neural_data(neural_packed_filename):
     
     return neural_mm
 
-def get_video_start_time(video_save_signal, multiple_action='error'):
-    """Return the time (in samples) of the video save pulse
-    
-    The video save signal in Room C is frequently incorrect. It's supposed
-    to be high throughout the recording. Instead, it is frequently pulsed
-    high for just 5 ms or so, sometimes multiple times, or never goes
-    high at all. I don't know if the 5 ms pulse actually maps onto the
-    start of the video or not. This might be because the saving command
-    is only guaranteed for the control camera, or something like that.
-    
-    trig_signal : array-like
-        The trigger signal
-    
-    multiple_action : string or None
-        Controls what happens if multiple triggers detected
-        'error': raise ValueError
-        'warn' or 'warning': print warning
-        anything else : do nothing
+def get_video_start_time(*args, **kwargs):
+    # only for deprecations below
+    import paclab.syncing
 
-    Returns: start_times, durations
-        start_times: start time in  samples
-        durations: duration in samples
-            
-        If multiple triggers are detected, they are all returned in an array
-        If only one, then only that one is returned
-    """
-    # Find threshold crossings
-    # 10.0V = 32768 (I think?), so 3.3V = 10813
-    # Take the first sample that exceeds roughly half that
-    trig_time_a, trig_duration_a = (
-        my.syncing.extract_onsets_and_durations(
-        video_save_signal, delta=5000, verbose=False, maximum_duration=np.inf))
-    
-    if len(trig_time_a) != 1:
-        if multiple_action == 'error':
-            raise ValueError("expected 1 trig, got {}".format(len(trig_time_a)))
-        elif multiple_action in ['warn', 'warning']:
-            print("warning: expected 1 trig, got {}".format(len(trig_time_a)))
+    print(
+        'warning: replace all calls to paclab.neural.get_video_start_time '
+        'with paclab.syncing.get_video_start_time instead'
+        )
+    return paclab.syncing.get_video_start_time(*args, **kwargs)
 
-    if len(trig_time_a) == 1:
-        return trig_time_a[0], trig_duration_a[0]
-    else:
-        return trig_time_a, trig_duration_a
+def get_recording_start_time(*args, **kwargs):
+    # only for deprecations below
+    import paclab.syncing
 
-def get_recording_start_time(trig_signal, multiple_action='error'):
-    """Return the time (in samples) of the recording start pulse
-    
-    trig_signal : array-like
-        The trigger signal
-    
-    multiple_action : string or None
-        Controls what happens if multiple triggers detected
-        'error': raise ValueError
-        'warn' or 'warning': print warning
-        anything else : do nothing
-    
-    An error occurs if this trigger is too short or too long
-    
-    If multiple triggers are detected, they are all returned in an array
-    If only one, then only that one is returned
-    """
-    # Find threshold crossings
-    # 10.0V = 32768 (I think?), so 3.3V = 10813
-    # Take the first sample that exceeds roughly half that
-    # We expect trig signal to last 100 ms (I think?), which is 2500 samples
-    # There is a pulse about 6000 samples long at the very beginning, which I
-    # think is when the nosepoke is initialized
-    trig_time_a, trig_duration_a = (
-        my.syncing.extract_onsets_and_durations(
-        trig_signal, delta=5000, verbose=False, maximum_duration=5000))
-    
-    if len(trig_time_a) != 1:
-        if multiple_action == 'error':
-            raise ValueError("expected 1 trig, got {}".format(len(trig_time_a)))
-        elif multiple_action in ['warn', 'warning']:
-            print("warning: expected 1 trig, got {}".format(len(trig_time_a)))
-
-    assert (trig_duration_a > 2495).all()
-    assert (trig_duration_a < 2540).all()
-
-    if len(trig_time_a) == 1:
-        return trig_time_a[0]
-    else:
-        return trig_time_a
+    print(
+        'warning: replace all calls to paclab.neural.get_recording_start_time '
+        'with paclab.syncing.get_recording_start_time instead'
+        )
+    return paclab.syncing.get_recording_start_time(*args, **kwargs)
 
 def make_plot(
     data, ax=None, n_range=None, sampling_rate=20000., 
@@ -296,3 +265,54 @@ def make_plot(
         'ax': ax,
         'data': got_data,
         }
+
+def load_spike_clusters(sort_dir):
+    """Load the cluster of each spike from kilosort data
+    
+    This includes any reclustering that was done in phy
+    """
+    spike_cluster = np.load(os.path.join(sort_dir, 'spike_clusters.npy'))
+    return spike_cluster
+
+def load_spikes(sort_dir):
+    """Load spike times from kilosort
+    
+    This is just the data in spike_times.npy, flattened
+    Data is converted to int (in case it is stored as uint64)
+    
+    Returns: 
+        spike_time_samples
+    """
+    spike_time_samples = np.load(
+        os.path.join(sort_dir, 'spike_times.npy')).flatten().astype(int)
+    
+    return spike_time_samples
+
+def load_spike_templates1(sort_dir):
+    """Return spike templates from kilosort
+
+    These are the actual templates that were used, not the templates
+    for each spike. For that, use load_spike_templates2
+    
+    Returns: templates
+        array with shape (n_templates, n_timepoints, n_channels)
+    """
+    templates = np.load(os.path.join(sort_dir, 'templates.npy'))
+    return templates
+
+def load_spike_amplitudes(sort_dir):
+    """Return spike amplitudes from kilosort
+    
+    """
+    # Amplitude of every spike
+    spike_amplitude = np.load(os.path.join(sort_dir, 'amplitudes.npy'))
+    
+    return spike_amplitude.flatten()
+
+def load_cluster_groups(sort_dir):
+    """Returns type (good, MUA, noise) of each cluster from kilosort"""
+    # This has n_manual_clusters rows, with the group for each
+    cluster_group = pandas.read_table(os.path.join(sort_dir, 
+        'cluster_group.tsv'))
+    
+    return cluster_group
