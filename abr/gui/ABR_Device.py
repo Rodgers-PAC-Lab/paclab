@@ -23,7 +23,6 @@ class ABR_Device(object):
         abr_data_path='/home/mouse/mnt/cuttlefish/surgery/abr_data',
         data_in_memory_duration_s=60,
         experimenter='mouse',
-        mode='live',
         ):
         """Initialize a new ABR_Device object to collect ABR data.
         
@@ -41,11 +40,18 @@ class ABR_Device(object):
         
         abr_data_path : str
             Path to root directory to store data in
+        
+        data_in_memory_duration_s : numeric
+            No data will be removed from the deque in memory and written to
+            disk until the length of the deque exceeds this amount. This is
+            also the maximum amount of data that can be analyzed by the GUI.
+            Increasing this value gives a more accurate representation of the
+            ABR, but it will slow GUI updates, and delay writing to disk. 
         """
         ## Store parameters
         # Currently not supported to change the sampling rate or gains
         self.sampling_rate = 16000
-        self.gains = [24, 1, 24, 1, 1, 1, 1, 1] # must be list to be json
+        self.gains = [24, 1, 24, 1, 24, 1, 1, 1] # must be list to be json
 
         # Control verbosity
         self.verbose = verbose
@@ -62,9 +68,6 @@ class ABR_Device(object):
         
         # How much data to keep in memory
         self.data_in_memory_duration_s = data_in_memory_duration_s
-        
-        # Whether to play data live or replay canned data
-        self.mode = mode
         
         
         ## Instance variables
@@ -150,7 +153,6 @@ class ABR_Device(object):
             match_found = False
             for existing_session_name in existing_session_names:
                 if existing_session_name.startswith(session_number_str):
-                    print(f'match found: {existing_session_name}')
                     match_found = True
                     break
             
@@ -171,112 +173,139 @@ class ABR_Device(object):
         
         return session_number, session_dir
         
-    def start_session(self):
+    def start_session(self, replay_filename=None):
         print('starting abr session...')
+        print(f'replay filename is {replay_filename}')        
         
+
+        ## Store the datetime str for the current session
+        self.session_dt_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+
 
         ## Define a session_name and create the session_directory
-        self.session_number, self.session_dir = (
-            self.determine_session_directory())
-
-        print(f'creating output directory {self.session_dir}')
-        os.mkdir(self.session_dir)
-        
-        # Also store the datetime str for the current session
-        self.session_dt_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        
-        
-        ## Open a serial connection to the teensy
-        self.ser = serial.Serial(
-            port=self.serial_port,
-            baudrate=self.serial_baudrate,
-            timeout=self.serial_timeout,
-            )
-        
-        
-        ## Close out the previous session
-        print('flushing serial port')
-        
-        # Flush
-        self.ser.flushInput()
-        self.ser.flush()
-        
-        # Stop data acquisition if it's already happening
-        serial_comm.write_stop(
-            self.ser, warn_if_not_running=False, warn_if_running=True)
-        
-        
-        ## Query the serial port
-        # Just a consistency check because the answer should always be the same
-        query_res = serial_comm.write_query(self.ser)
-
-
-        ## Set parameters
-        # Form the command
-        # TODO: document these other parameters
-        str_gains = ','.join([str(gain) for gain in self.gains])
-        cmd_str = f'U,8,{self.sampling_rate},0,{str_gains};'
-        
-        # Log
-        print(f'setting parameters: {cmd_str}')
-        
-        # Log the configs that were used
-        to_json = query_res['message']
-        
-        # Store configs from this object
-        to_json['gains'] = self.gains
-        to_json['sampling_rate'] = self.sampling_rate
-        to_json['session_start_time'] = self.session_dt_str
-        
-        # Mistakenly, this was int64 in early versions of this software
-        # There is currently no support for changing the output_dtype
-        # This makes the output_dtype explicit, and also works as a flag
-        # for when this fix went into effect
-        to_json['output_dtype'] = 'int32'
-        
-        # Write the config file
-        with open(os.path.join(self.session_dir, 'config.json'), 'w') as fi:
-            json.dump(to_json, fi)
+        # Only create the output directory if this is a live session
+        if replay_filename is None:
+            self.session_number, self.session_dir = (
+                self.determine_session_directory())
             
-        # Send the command
-        serial_comm.write_setupU(self.ser, cmd_str)
+            print(f'creating output directory {self.session_dir}')
+            os.mkdir(self.session_dir)
+        
+        
+        ## These steps only occur if we're in live mode
+        if replay_filename is None:
+            ## Open a serial connection to the teensy
+            self.ser = serial.Serial(
+                port=self.serial_port,
+                baudrate=self.serial_baudrate,
+                timeout=self.serial_timeout,
+                )
+            
+            
+            ## Close out the previous session
+            print('flushing serial port')
+            
+            # Flush
+            self.ser.flushInput()
+            self.ser.flush()
+            
+            # Stop data acquisition if it's already happening
+            serial_comm.write_stop(
+                self.ser, warn_if_not_running=False, warn_if_running=True)
+            
+            
+            ## Query the serial port
+            # Just a consistency check because the answer should always be the same
+            query_res = serial_comm.write_query(self.ser)
 
 
-        ## Tell it to start
-        print('starting acquisition...')
-        serial_comm.write_start(self.ser)
+            ## Set parameters
+            # Form the command
+            # TODO: document these other parameters
+            str_gains = ','.join([str(gain) for gain in self.gains])
+            cmd_str = f'U,8,{self.sampling_rate},0,{str_gains};'
+            
+            # Log
+            print(f'setting parameters: {cmd_str}')
+            
+            # Log the configs that were used
+            to_json = query_res['message']
+            
+            # Store configs from this object
+            to_json['gains'] = self.gains
+            to_json['sampling_rate'] = self.sampling_rate
+            to_json['session_start_time'] = self.session_dt_str
+            
+            # Mistakenly, this was int64 in early versions of this software
+            # There is currently no support for changing the output_dtype
+            # This makes the output_dtype explicit, and also works as a flag
+            # for when this fix went into effect
+            to_json['output_dtype'] = 'int32'
+            
+            # Write the config file
+            with open(os.path.join(self.session_dir, 'config.json'), 'w') as fi:
+                json.dump(to_json, fi)
+                
+            # Send the command
+            serial_comm.write_setupU(self.ser, cmd_str)
 
 
-        ## Start the TSR
-        # Choose it, depending on mode
-        if self.mode == 'live':
+            ## Tell it to start
+            print('starting acquisition...')
+            serial_comm.write_start(self.ser)
+
+            
+            ## Start acquiring
             self.tsr = ThreadedSerialReader(self.ser, verbose=False)
-        elif self.mode == 'canned':
-            self.tsr = ThreadedFileReader(
-                '/home/mouse/mnt/cuttlefish/abr/LVdata/241120/BG/BG-0004.bin')
+            self.tsr.start()
+
+
+            ## Start the TFW
+            # This parameter determines how much data is kept in memory before
+            # writing to disk
+            # We want to make sure at least that many chunks are kept in the deque
+            # before writing out
+            minimum_deq_length = int(np.rint(
+                self.data_in_memory_duration_s * self.sampling_rate / 500))
+            
+            # Create tfw
+            self.tfw = ThreadedFileWriter(
+                self.tsr.deq_data, 
+                self.tsr.deq_headers,
+                verbose=False,
+                output_filename=os.path.join(self.session_dir, 'data.bin'),
+                output_header_filename=os.path.join(self.session_dir, 'packet_headers.csv'),
+                minimum_deq_length=minimum_deq_length,
+                )
+            self.tfw.start()
         
-        # Start it
-        self.tsr.start()
-        
-        
-        ## Start the TFW
-        # This parameter determines how much data is kept in memory before
-        # writing to disk
-        # We want to make sure at least that many chunks are kept in the deque
-        # before writing out
-        minimum_deq_length = int(np.rint(
-            self.data_in_memory_duration_s * self.sampling_rate / 500))
-        
-        # Create tfw
-        self.tfw = ThreadedFileWriter(
-            self.tsr.deq_data, 
-            self.tsr.deq_headers,
-            verbose=False,
-            output_filename=os.path.join(self.session_dir, 'data.bin'),
-            output_header_filename=os.path.join(self.session_dir, 'packet_headers.csv'),
-            minimum_deq_length=minimum_deq_length,
-            )
-        self.tfw.start()
+        else:
+            ## This is the canned mode
+            # In this case the deque will never be emptied
+            # TODO: initialize a dummy ThreadedFileWriter to do nothing
+            # but empty the deque
+            self.tsr = ThreadedFileReader(replay_filename)
+            self.tsr.start()
+
+
+            ## Start the TFW
+            # This parameter determines how much data is kept in memory before
+            # writing to disk
+            # We want to make sure at least that many chunks are kept in the deque
+            # before writing out
+            minimum_deq_length = int(np.rint(
+                self.data_in_memory_duration_s * self.sampling_rate / 500))
+            
+            # Create tfw
+            self.tfw = ThreadedFileWriter(
+                self.tsr.deq_data, 
+                self.tsr.deq_headers,
+                verbose=False,
+                output_filename=None,
+                output_header_filename=None,
+                minimum_deq_length=minimum_deq_length,
+                )
+            self.tfw.start()            
 
     def stop_session(self):
         print('stopping abr session...')
@@ -315,14 +344,23 @@ class ThreadedFileWriter(object):
 
         deq_data : deque 
             Data filled by and shared with ThreadedSerialReader
+            These are the chunks of data, with time along the rows
         
-        output_filename : str
+        deq_headers : deque 
+            Data filled by and shared with ThreadedSerialReader
+            These are the headers for each chunk of data, one row per chunk
+
+        output_filename : str or None
             Where to write out data
+            if None, nothing is written to disk
         
+        output_header_filename : str or None
+            Where to write out headers
+            if None, nothing is written to disk
+
         minimum_deq_length : int
             If len(deq) < minimum_deq_length, no data will be popped or written
             This ensure there is always recent data to visualize
-        
         """
         # Store
         self.output_filename = output_filename
@@ -335,26 +373,28 @@ class ThreadedFileWriter(object):
         self.verbose = verbose
         self.n_chunks_written = 0
         
-        # TODO: make this match the rest of the code
-        self.header_colnames = [
-            'header_size',
-            'header_nbytes',
-            'data_format_enum',
-            'data_format',
-            'total_packets',
-            'packet_num',
-            'data_class',
-            'n_samples',
-            ]
+        # Set to null by default
+        if self.output_filename is None:
+            self.output_filename = os.devnull
+        
+        if self.output_header_filename is None:
+            self.output_header_filename = os.devnull
+        
+        #~ # Keep track of big_data here
+        #~ self.big_data_last_col = 0
+        #~ self.big_data = None
+        #~ self.headers_l = []
+        
+        # This will be set by the first header that's received
+        self.header_colnames = None
         
         # Erase the file
         with open(self.output_filename, 'wb') as output_file:
             pass
         
         # Write the headers
-        with open(self.output_header_filename, 'a') as headers_out:
-            str_to_write = ','.join(self.header_colnames)
-            headers_out.write(str_to_write + '\n')            
+        with open(self.output_header_filename, 'w') as headers_out:
+            pass
 
     def write_to_disk(self, drain=False):
         # Don't write if the deq is too short, unless drain is True
@@ -369,15 +409,25 @@ class ThreadedFileWriter(object):
                 open(self.output_header_filename, 'a') as headers_out
                 ):
             while len(self.deq_data) > threshold:
+                ## Pop
                 # Pop the oldest data
                 data_chunk = self.deq_data.popleft()
                 
                 # Pop the oldest header
                 data_header = self.deq_headers.popleft()
             
-                # Append raw data to output file
-                # TODO: ensure that this is writing in a consistent format
-                # such as int32. Seems to be writing as int64
+            
+                ## Set up the header row of headers_out if first time
+                if self.header_colnames is None:
+                    self.header_colnames = sorted(data_header.keys())
+                
+                    # Write the header
+                    str_to_write = ','.join(self.header_colnames)
+                    headers_out.write(str_to_write + '\n')            
+                
+                
+                ## Append raw data to output file
+                # Note: just maintains dtype of whatever data_chunk is
                 data_out.write(data_chunk)
                 
                 # Append header
@@ -385,6 +435,49 @@ class ThreadedFileWriter(object):
                     [str(data_header[colname]) for colname in self.header_colnames])
                 headers_out.write(str_to_write + '\n')
                 
+
+                #~ ## Append to big data
+                #~ if self.big_data is None:
+                    #~ # Special case, it doesn't exist yet
+                    #~ # This is also how we find out how many columns it has
+                    #~ self.big_data = data_chunk.copy()
+                    #~ self.big_data_last_col = len(data_chunk)
+                
+                #~ else:
+                    #~ # The normal case, self.big_data does exist
+                    #~ # This is how long it will be
+                    #~ self.new_big_data_last_col = (
+                        #~ self.big_data_last_col + len(data_chunk))
+
+                    #~ # Grow if needed
+                    #~ if self.new_big_data_last_col > len(self.big_data):
+                        #~ # Make it twice as big as needed
+                        #~ new_len = 2 * self.new_big_data_last_col
+                        
+                        #~ # Fill it with zeros
+                        #~ self.new_big_data = np.zeros(
+                            #~ (new_len, self.big_data.shape[1]))
+                        
+                        #~ # Copy in the old data
+                        #~ self.new_big_data[:self.big_data_last_col] = (
+                            #~ self.big_data[:self.big_data_last_col])
+                        
+                        #~ # Rename
+                        #~ self.big_data = self.new_big_data
+                    
+                    #~ # Add the new data at the end
+                    #~ self.big_data[
+                        #~ self.big_data_last_col:self.new_big_data_last_col] = (
+                        #~ data_chunk)
+
+                    #~ # Update the pointer
+                    #~ self.big_data_last_col = self.new_big_data_last_col
+
+                #~ # Store read headers
+                #~ self.headers_l.append(data_header)
+
+                
+                ## Keep track of how many chunks written
                 self.n_chunks_written += 1
         
         if self.verbose:
@@ -461,7 +554,8 @@ class ThreadedFileReader(object):
         # We need to parse the first header separately because it has data that
         # we need to parse the rest of the packets.
         first_header_bytes = data_bytes[:60]
-        self.first_header_info = paclab.abr.parse_header(first_header_bytes)
+        self.first_header_info = paclab.abr.labview_loading.parse_header(
+            first_header_bytes)
 
         # Make it match expected format
         self.first_header_info['header_size'] = 0
@@ -473,7 +567,7 @@ class ThreadedFileReader(object):
         self.first_header_info['n_samples'] = 0
 
         # Parse the entire file
-        self.data = paclab.abr.parse_data(
+        self.data = paclab.abr.labview_loading.parse_data(
             data_bytes,
             self.first_header_info['number_channels'],
             self.first_header_info['number_samples'])
@@ -577,13 +671,25 @@ class ThreadedSerialReader(object):
     
     def read_and_append(self):
         # Read a data packet
+        # Relatively long wait_time here, in hopes that if something is
+        # screwed up we can find sync bytes and get back on track
         data_packet = serial_comm.read_and_classify_packet(
-            self.ser, wait_time=0.1, assert_packet_type='data')
+            self.ser, wait_time=0.5, assert_packet_type='data')
         
         # If any data remains, this was a late read
-        if self.ser.in_waiting > 0:
-            print(f'late read! {self.ser.in_waiting}')
-            self.late_reads += 1    
+        in_waiting = self.ser.in_waiting
+        if in_waiting > 0:
+            print(f'late read! {in_waiting} bytes in waiting')
+            self.late_reads += 1  
+            data_packet['message']['late_read'] = True
+            data_packet['message']['in_waiting'] = in_waiting
+        else:
+            data_packet['message']['late_read'] = False
+            data_packet['message']['in_waiting'] = in_waiting
+            
+        # Store the time
+        if self.verbose:
+            print(f"read packet {data_packet['message']['packet_num']}")
     
         # Append to the left side of the deque
         self.deq_headers.append(data_packet['message'])
@@ -591,6 +697,9 @@ class ThreadedSerialReader(object):
         
         # Log
         self.n_packets_read += 1
+        
+        #if self.n_packets_read == 10:
+        #    time.sleep(.5)
 
     def capture(self):
         """Target of the thread

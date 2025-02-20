@@ -1,4 +1,4 @@
-"""For parsing HDF5 files and returning DataFrames"""
+"""For parsing autopilot HDF5 files and returning DataFrames"""
 import datetime
 import os
 import numpy as np
