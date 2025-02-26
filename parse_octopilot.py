@@ -189,11 +189,14 @@ def load_session(octopilot_root, octopilot_session_name):
             subdf.loc[fix_mask, 'speaker_frame'] += 2 ** 32
         
         # Error check ordering
+        # Not sure why this happens, but sometimes two sounds are played in
+        # the same frame
         diff_time = np.diff(subdf['message_frame'])
         n_out_of_order = np.sum(diff_time < 0)
         if n_out_of_order > 0:
             print(
                 "warning: {} rows of sounds_played_df ".format(n_out_of_order) +
+                f"in session {octopilot_session_name} " +
                 "out of order by at worst {} frames".format(diff_time.min())
                 )
         

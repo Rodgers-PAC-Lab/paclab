@@ -162,3 +162,39 @@ def get_metadata(data_directory, datestring, metadata_version):
         os.path.join(data_directory, recording_name, 'data.bin')
         for recording_name in metadata['recording_name']]
     return metadata
+
+def drop_torn_packets(data,header_df, debug_plot=False,speaker_channel=7):
+    # Go through and find where the tearing is
+    torn = np.diff(header_df['packet_num_unwrapped']) != 1
+    # This labels data as torn ON THE PACKET WHERE IT MESSED UP, instead of the next correct packet
+    header_df['torn'] = np.array([*torn, False])
+    # To calculate the correct sample numbers we need to know the number of packets recieved by the GUI,
+    #  rather than the ACTUAL packet number sent from the Teensy
+    header_df['pkt_sequence'] = np.arange(len(header_df))
+    header_df['sample_number_start'] = header_df['pkt_sequence'] * 500
+    torn_headers = header_df.loc[header_df['torn'] == True]
+
+    # Optional plot of the speaker channel with torn packets highlighted in green
+    if debug_plot:
+        import matplotlib.pyplot as plt
+        plt.plot(data[:, speaker_channel])
+        bad_samples = []
+        for pkt in torn_headers.index:
+            start = torn_headers.loc[pkt]['sample_number_start']
+            bad_samples.append([start, start + 500])
+            plt.axvspan(start, start + 500, facecolor='green', alpha=0.5)
+        plt.show()
+
+    packets_l = []
+    for pkt_n in range(len(header_df)):
+        pkt = header_df.iloc[pkt_n]
+        if pkt['torn'] == False:
+            packets_l.append(
+                data[(pkt_n * 500): (pkt_n + 1) * 500]
+            )
+    new_data = np.concatenate(packets_l)
+
+    # Make sure the number of samples dropped matches the number of packets torn
+    assert len(data) - len(new_data) == len(torn_headers) * 500
+
+    return new_data, header_df
