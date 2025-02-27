@@ -7,6 +7,7 @@ import scipy.stats
 import numpy as np
 import pytz
 import pandas
+import warnings
 
 def str2dt(s):
     """Transform string `s` into a datetime in timezone `America/NewYork`"""
@@ -102,6 +103,13 @@ def load_session(octopilot_root, octopilot_session_name):
             os.path.join(octopilot_session_dir, 'pokes.csv'), sep=',')
         flashes = pandas.read_table(
             os.path.join(octopilot_session_dir, 'flashes.csv'), sep=',', header=None)
+            
+    # Dropping rows in dfs with null values 
+    for name, df in [('sounds', sounds), ('sound_plans', sound_plans), ('trials', trials), ('pokes', pokes), ('flashes', flashes)]:
+        num_nulls = df.isnull().sum().sum()
+        if num_nulls > 0:
+            warnings.warn(f"Dropping {num_nulls} rows with null values in {name}")
+            df.dropna(inplace=True)
 
     # Rename this one to indicate that it is the time the message was
     # sent about the sound, which is definitely not the time it played
@@ -120,7 +128,6 @@ def load_session(octopilot_root, octopilot_session_name):
     pokes['poke_time'] = pokes['poke_time'].apply(str2dt)
     trials['start_time'] = trials['start_time'].apply(str2dt)
     trials['reward_time'] = trials['reward_time'].apply(str2dt)
-
 
     ## Define session_start_time
     # Take the time of the first trial on the desktop
