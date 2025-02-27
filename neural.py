@@ -107,6 +107,14 @@ def load_neural_data(neural_packed_filename, n_channels, offset=8):
 def load_open_ephys_data(directory, recording_idx=0, convert_to_microvolts=True):
     """Load OpenEphys data
     
+    For debugging (i.e., determining how many recording_idx there are, try
+        session = open_ephys.analysis.Session(directory)
+    I think len(session.recordnodes) is always 1 for our setup
+    sesion.recordnodes.recordings is a list of recordings. The distinction
+    between experiments and recordings is ignored, it's just a simple list.
+    
+    TODO: how do you get the start time of each recording?
+    
     directory : path to session
     recording_idx : int, which recording to get
     convert_to_microvolts : bool
