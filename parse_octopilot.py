@@ -105,7 +105,7 @@ def load_session(octopilot_root, octopilot_session_name):
             os.path.join(octopilot_session_dir, 'flashes.csv'), sep=',', header=None)
             
     # Dropping rows in dfs with null values 
-    for name, df in [('sounds', sounds), ('sound_plans', sound_plans), ('trials', trials), ('pokes', pokes), ('flashes', flashes)]:
+    for name, df in [('trials', trials)]:
         num_nulls = df.isnull().sum().sum()
         if num_nulls > 0:
             warnings.warn(f"Dropping {num_nulls} rows with null values in {name}")
