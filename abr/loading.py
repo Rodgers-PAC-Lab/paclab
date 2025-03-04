@@ -144,17 +144,19 @@ def get_metadata(data_directory, datestring, metadata_version):
         metadata['recording_name'] = ['{:03d}'.format(n) for n in metadata['session'].values]
         metadata['ch0_config'] = (metadata['positive_electrode'].str.cat(metadata['negative_electrode']))
         metadata['ch2_config'] = (metadata['positive_ch3'].str.cat(metadata['negative_ch3']))
+        metadata['ch4_config'] = 'NN'
         metadata = metadata.rename(columns={"session":"recording"})
         metadata = metadata.drop(['pre_vs_post','positive_electrode','negative_electrode','positive_ch3','negative_ch3'],axis=1)
     elif metadata_version=='v5' or metadata_version=='v6':
         metadata['recording_name'] = ['{:03d}'.format(n) for n in metadata['recording'].values]
-
+        if metadata_version=='v5':
+            metadata['ch4_config'] = 'NN'
     else:
-        print("ERROR, METADATA VERSION NOT V4 or V5")
+        print("ERROR, METADATA VERSION NOT V4, V5, OR V6")
         return
     # Form the full path to the session
     metadata['datafile'] = [
-        os.path.join(data_directory, recording_name, 'data.bin')
+        os.path.join(data_directory, recording_name)
         for recording_name in metadata['recording_name']]
     return metadata
 
