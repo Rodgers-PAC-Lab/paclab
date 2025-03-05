@@ -7,6 +7,7 @@ import scipy.stats
 import numpy as np
 import pytz
 import pandas
+import warnings
 
 def str2dt(s):
     """Transform string `s` into a datetime in timezone `America/NewYork`"""
@@ -94,14 +95,27 @@ def load_session(octopilot_root, octopilot_session_name):
     else:
         sounds = pandas.read_table(
             os.path.join(octopilot_session_dir, 'sounds.csv'), sep=',')
-        sound_plans = pandas.read_table(
-            os.path.join(octopilot_session_dir, 'sound_plans.csv'), sep=',')
+        try:
+            sound_plans = pandas.read_table(
+                os.path.join(octopilot_session_dir, 'sound_plans.csv'), sep=',')
+        except FileNotFoundError:
+            sound_plans = None
         trials = pandas.read_table(
             os.path.join(octopilot_session_dir, 'trials.csv'), sep=',')
         pokes = pandas.read_table(
             os.path.join(octopilot_session_dir, 'pokes.csv'), sep=',')
-        flashes = pandas.read_table(
-            os.path.join(octopilot_session_dir, 'flashes.csv'), sep=',', header=None)
+        try:
+            flashes = pandas.read_table(
+                os.path.join(octopilot_session_dir, 'flashes.csv'), sep=',', header=None)
+        except FileNotFoundError:
+            flashes = None
+            
+    # Dropping rows in dfs with null values 
+    for name, df in [('trials', trials)]:
+        num_nulls = df.isnull().sum().sum()
+        if num_nulls > 0:
+            warnings.warn(f"Dropping {num_nulls} rows with null values in {name}")
+            df.dropna(inplace=True)
 
     # Rename this one to indicate that it is the time the message was
     # sent about the sound, which is definitely not the time it played
@@ -109,34 +123,80 @@ def load_session(octopilot_root, octopilot_session_name):
     sounds = sounds.rename(columns={'sound_time': 'message_time'})
 
     # TODO: fix this missing header
-    flashes.columns = ['trial_number', 'rpi', 'flash_time']
+    if flashes is not None:
+        flashes.columns = ['trial_number', 'rpi', 'flash_time']
 
     # Index trials by trial_number
     trials = trials.set_index('trial_number')
 
     # Coerce
-    flashes['flash_time'] = flashes['flash_time'].apply(str2dt)
+    if flashes is not None:
+        flashes['flash_time'] = flashes['flash_time'].apply(str2dt)
     sounds['message_time'] = sounds['message_time'].apply(str2dt)
     pokes['poke_time'] = pokes['poke_time'].apply(str2dt)
     trials['start_time'] = trials['start_time'].apply(str2dt)
     trials['reward_time'] = trials['reward_time'].apply(str2dt)
 
 
-    ## Define session_start_time
-    # Take the time of the first trial on the desktop
-    # It doesn't really matter whether this is the same time on all of the
-    # other pis. This is just a point of reference to convert datetimes to floats
-    session_start_time = trials['start_time'].iloc[0]
+    ## This part can only be done if it's not empty
+    # And the sync doesn't work well with only one
+    flash_wrt_session_start = None
+    
+    if len(trials) > 3 and sound_plans is not None:
+        ## Define session_start_time
+        # Take the time of the first trial on the desktop
+        # It doesn't really matter whether this is the same time on all of the
+        # other pis. This is just a point of reference to convert datetimes to floats
+        session_start_time = trials['start_time'].iloc[0]
 
-    # Define time in session
-    trials['start_time_s'] = (
-        trials['start_time'] - session_start_time).dt.total_seconds()
+        # Define time in session
+        trials['start_time_s'] = (
+            trials['start_time'] - session_start_time).dt.total_seconds()
 
-    # Convert datetimes to time in seconds since session_start_time
-    sounds['message_time_s'] = (
-        sounds['message_time'] - session_start_time).dt.total_seconds()
+        # Convert datetimes to time in seconds since session_start_time
+        sounds['message_time_s'] = (
+            sounds['message_time'] - session_start_time).dt.total_seconds()
 
 
+        ## Sync sounds and join sound plans
+        sounds = sync_sounds(sounds, octopilot_session_name)
+
+        # Join sound plans onto sounds
+        sounds = join_sound_plans_on_sounds(sounds, sound_plans)
+
+    
+        if flashes is not None:
+            ## Put rpi on columns of flashes
+            flashes = flashes.set_index(
+                ['trial_number', 'rpi'])['flash_time'].unstack('rpi')
+
+            # The start times according to the desktop
+            trial_start_times_clock = trials['start_time']
+
+            # The flash times on each rpi, wrt trial_start_time
+            # This is never negative, peaks at 10ms, generally <20ms, 
+            # but very long tail out to 100ms
+            flash_wrt_trial_start = flashes.sub(
+                trial_start_times_clock, axis=0).apply(
+                lambda ser: ser.dt.total_seconds())
+
+            # The flash times on each rpi, wrt session_start_time
+            flash_wrt_session_start = flashes.sub(
+                session_start_time).apply(
+                lambda ser: ser.dt.total_seconds())
+
+
+    ## Return
+    return {
+        'sounds': sounds,
+        'sound_plans': sound_plans,
+        'trials': trials,
+        'pokes': pokes,
+        'flashes': flashes,
+        'flash_wrt_session_start': flash_wrt_session_start,
+        }
+
+def sync_sounds(sounds, octopilot_session_name):
     ## Account for buffering delay
     # This is mostly from paclab.parse.load_sounds_played
     # Calculate message_frame, the frame number at the time the message was sent
@@ -243,8 +303,11 @@ def load_session(octopilot_root, octopilot_session_name):
     # Concat the results and add to sounds_played_df
     concatted = pandas.concat(speaker_time_l)
     sounds['speaker_time_s'] = concatted
+    
+    
+    return sounds
 
-
+def join_sound_plans_on_sounds(sounds, sound_plans):
     ## Join the sound_plans on the sounds
     # This actually works now that we have an ITI
 
@@ -297,33 +360,5 @@ def load_session(octopilot_root, octopilot_session_name):
     # Reset index for backwards compat
     sounds = sounds.reset_index()
 
-
-    ## Put rpi on columns of flashes
-    flashes = flashes.set_index(
-        ['trial_number', 'rpi'])['flash_time'].unstack('rpi')
-
-    # The start times according to the desktop
-    trial_start_times_clock = trials['start_time']
-
-    # The flash times on each rpi, wrt trial_start_time
-    # This is never negative, peaks at 10ms, generally <20ms, 
-    # but very long tail out to 100ms
-    flash_wrt_trial_start = flashes.sub(
-        trial_start_times_clock, axis=0).apply(
-        lambda ser: ser.dt.total_seconds())
-
-    # The flash times on each rpi, wrt session_start_time
-    flash_wrt_session_start = flashes.sub(
-        session_start_time).apply(
-        lambda ser: ser.dt.total_seconds())
-
-
-    ## Return
-    return {
-        'sounds': sounds,
-        'sound_plans': sound_plans,
-        'trials': trials,
-        'pokes': pokes,
-        'flashes': flashes,
-        'flash_wrt_session_start': flash_wrt_session_start,
-        }
+    return sounds
+    
