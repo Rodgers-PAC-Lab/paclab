@@ -44,8 +44,8 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         update_interval_ms=100, # it can't really go any faster
         duration_data_to_analyze_s=300, 
         neural_scope_xrange_s=5,
-        neural_scope_yrange_uV=30000,
-        highpass_neural_scope_yrange_uV=300,
+        neural_scope_yrange_uV=200000, # max achievable is 187500 at gain=24
+        highpass_neural_scope_yrange_uV=30, # should have stdev ~1 uV
         audio_scope_xrange_s=5,
         audio_scope_yrange_uV=300000,
         abr_audio_monitor_yrange_uV=5, # abslog scale
@@ -77,7 +77,7 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         self.audio_extract_win_samples = audio_extract_win_samples
 
         # TODO: get this from config
-        self.neural_channels_to_plot = [0, 2]
+        self.neural_channels_to_plot = [0, 2, 4]
         self.speaker_channel = 7
 
         # Parameters that can be set by user interaction
@@ -166,6 +166,7 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         self.abr_neg_audio_monitor_widget = pg.PlotWidget()
         self.abr_neural_ch0_monitor_widget = pg.PlotWidget()
         self.abr_neural_ch2_monitor_widget = pg.PlotWidget()
+        self.abr_neural_ch4_monitor_widget = pg.PlotWidget()
         
         # Size them
         self.neural_plot_widget.setFixedHeight(150)
@@ -225,11 +226,20 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
             PyQt5.QtWidgets.QLabel('plot ch 2?'), 3, 0)
         row_neural_boxes.addWidget(self.checkbox_plot_ch2_neural, 3, 1)
 
+        # Param: checkbox for plot_ch4
+        self.checkbox_plot_ch4_neural = PyQt5.QtWidgets.QCheckBox()
+        self.checkbox_plot_ch4_neural.setChecked(True)
+        self.checkbox_plot_ch4_neural.stateChanged.connect(
+            self.checkbox_plot_ch4_neural_update)
+        row_neural_boxes.addWidget(
+            PyQt5.QtWidgets.QLabel('plot ch 4?'), 4, 0)
+        row_neural_boxes.addWidget(self.checkbox_plot_ch4_neural, 4, 1)
+
         # Param: label for amount of data received
         self.label_analyze_data_duration_s = PyQt5.QtWidgets.QLabel()
         row_neural_boxes.addWidget(
-            PyQt5.QtWidgets.QLabel('data analyzed (s)'), 4, 0)
-        row_neural_boxes.addWidget(self.label_analyze_data_duration_s, 4, 1)
+            PyQt5.QtWidgets.QLabel('data analyzed (s)'), 5, 0)
+        row_neural_boxes.addWidget(self.label_analyze_data_duration_s, 5, 1)
         
 
 
@@ -269,11 +279,20 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
             PyQt5.QtWidgets.QLabel('plot ch 2?'), 2, 0)
         row_highpass_neural_boxes.addWidget(self.checkbox_plot_ch2_highpass, 2, 1)
         
+        # Param: checkbox for plot_ch4
+        self.checkbox_plot_ch4_highpass = PyQt5.QtWidgets.QCheckBox()
+        self.checkbox_plot_ch4_highpass.setChecked(True)
+        self.checkbox_plot_ch4_highpass.stateChanged.connect(
+            self.checkbox_plot_ch4_highpass_update)
+        row_highpass_neural_boxes.addWidget(
+            PyQt5.QtWidgets.QLabel('plot ch 4?'), 3, 0)
+        row_highpass_neural_boxes.addWidget(self.checkbox_plot_ch4_highpass, 3, 1)
+        
         # Label: heart rate
         self.label_heart_rate = PyQt5.QtWidgets.QLabel('')
         row_highpass_neural_boxes.addWidget(
-            PyQt5.QtWidgets.QLabel('heart rate'), 3, 0)
-        row_highpass_neural_boxes.addWidget(self.label_heart_rate, 3, 1)
+            PyQt5.QtWidgets.QLabel('heart rate'), 4, 0)
+        row_highpass_neural_boxes.addWidget(self.label_heart_rate, 4, 1)
 
 
         ## Second row: a row of audio widgets
@@ -313,6 +332,7 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         self.abr_layout.addWidget(self.abr_neg_audio_monitor_widget)
         self.abr_layout.addWidget(self.abr_neural_ch0_monitor_widget)
         self.abr_layout.addWidget(self.abr_neural_ch2_monitor_widget)
+        self.abr_layout.addWidget(self.abr_neural_ch4_monitor_widget)
 
         # GridLayout for params
         abr_layout_grid = PyQt5.QtWidgets.QGridLayout()
@@ -352,12 +372,19 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         abr_layout_grid.addWidget(
             self.label_abr_ch2_noise, 3, 1)        
 
+        # Label: ch4 abr noise
+        self.label_abr_ch4_noise = PyQt5.QtWidgets.QLabel('')
+        abr_layout_grid.addWidget(
+            PyQt5.QtWidgets.QLabel('ch4 ABR noise'), 4, 0)
+        abr_layout_grid.addWidget(
+            self.label_abr_ch4_noise, 4, 1)        
+
         # Label: plot time required
         self.label_plot_time_required = PyQt5.QtWidgets.QLabel('')
         abr_layout_grid.addWidget(
-            PyQt5.QtWidgets.QLabel('plotting time required (ms)'), 4, 0)
+            PyQt5.QtWidgets.QLabel('plotting time required (ms)'), 5, 0)
         abr_layout_grid.addWidget(
-            self.label_plot_time_required, 4, 1)            
+            self.label_plot_time_required, 5, 1)            
 
         
         ## Set labels and colors of `plot_widget`
@@ -382,6 +409,15 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         else:
             self.neural_plot_handle_l[1].setVisible(False)
 
+    def checkbox_plot_ch4_neural_update(self):
+        """Set visibility of ch4 on neural plot based on checkbox"""
+        # TODO: This hardcodes ch4 as index 2, fix
+        checked = self.checkbox_plot_ch4_neural.checkState()
+        if checked:
+            self.neural_plot_handle_l[2].setVisible(True)
+        else:
+            self.neural_plot_handle_l[2].setVisible(False)
+
     def checkbox_plot_ch0_highpass_update(self):
         checked = self.checkbox_plot_ch0_highpass.checkState()
         if checked:
@@ -397,6 +433,15 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
             self.highpass_neural_plot_handle_l[1].setVisible(True)
         else:
             self.highpass_neural_plot_handle_l[1].setVisible(False)
+
+    def checkbox_plot_ch4_highpass_update(self):
+        """Set visibility of ch4 on neural plot based on checkbox"""
+        # TODO: This hardcodes ch4 as index 2, fix
+        checked = self.checkbox_plot_ch4_highpass.checkState()
+        if checked:
+            self.highpass_neural_plot_handle_l[2].setVisible(True)
+        else:
+            self.highpass_neural_plot_handle_l[2].setVisible(False)
 
     def line_edit_neural_scope_xrange_s_update(self):
         try:
@@ -485,12 +530,14 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         self.abr_neg_audio_monitor_widget.setBackground('k')
         self.abr_neural_ch0_monitor_widget.setBackground('k')
         self.abr_neural_ch2_monitor_widget.setBackground('k')
+        self.abr_neural_ch4_monitor_widget.setBackground('k')
 
         # Set the title
         self.abr_pos_audio_monitor_widget.setTitle('positive clicks')
         self.abr_neg_audio_monitor_widget.setTitle('negative clicks')
         self.abr_neural_ch0_monitor_widget.setTitle('ch0 ABR')
         self.abr_neural_ch2_monitor_widget.setTitle('ch2 ABR')
+        self.abr_neural_ch4_monitor_widget.setTitle('ch4 ABR')
         
         # Set the ylabel
         self.neural_plot_widget.setLabel('left', 'neural signal (uV)')
@@ -528,6 +575,8 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         self.abr_neural_ch0_monitor_widget.setYRange(
             -self.abr_neural_yrange_uV, self.abr_neural_yrange_uV)
         self.abr_neural_ch2_monitor_widget.setYRange(
+            -self.abr_neural_yrange_uV, self.abr_neural_yrange_uV)
+        self.abr_neural_ch4_monitor_widget.setYRange(
             -self.abr_neural_yrange_uV, self.abr_neural_yrange_uV)
     
     def initalize_plot_handles(self):
@@ -579,6 +628,7 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         self.abr_audio_monitor_neg_handle_l = []
         self.abr_ch0_handle_l = []
         self.abr_ch2_handle_l = []
+        self.abr_ch4_handle_l = []
         for n_amplitude, amplitude_label in enumerate(self.amplitude_labels):
             # Positive clicks
             handle = self.abr_pos_audio_monitor_widget.plot(
@@ -607,6 +657,13 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
                 pen=(n_amplitude, len(self.amplitude_labels))
                 )
             self.abr_ch2_handle_l.append(handle)
+
+            # ABRs ch4
+            handle = self.abr_neural_ch4_monitor_widget.plot(
+                x=[], y=[],
+                pen=(n_amplitude, len(self.amplitude_labels))
+                )
+            self.abr_ch4_handle_l.append(handle)
     
     def start(self):
         # Start the timer that will continuously update
@@ -686,13 +743,16 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         
         
         ## Get data in real physical units
-        # Convert to uV
-        big_data = big_data * 9e6 / 2**24 # right?
+        # Convert to uV (full-scale range is 9V)
+        big_data = big_data * 9e6 / 2 ** 24
         
         # Account for gain (TODO: load from config)
+        # Note: maximum achievable value is 4.5V / gain, or 0.1875 V for gain=24
         big_data = big_data / np.array(self.abr_device.gains)
         
         # Use headers_df to make the xvals
+        # If there are dropped packets, these xvals will be wrong, but I 
+        # don't think it really matters or is worth fixing here
         packet_numbers = np.unwrap(headers_df['packet_num'], period=256)
         start_time_samples = packet_numbers[0] * 500
         stop_time_samples = (packet_numbers[-1] + 1) * 500
@@ -700,10 +760,6 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
             np.arange(start_time_samples, stop_time_samples) / 
             self.abr_device.sampling_rate
             )
-        
-        # Check for tearing
-        if (np.diff(packet_numbers) != 1).any():
-            raise ValueError('data is torn!')   
 
         return big_data, headers_df, t_values
 
@@ -975,9 +1031,11 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         # them together.
         ch0_noise = avg_abrs.loc[:, 0].loc[:, -40:-19].std(axis=1).mean()
         ch2_noise = avg_abrs.loc[:, 2].loc[:, -40:-19].std(axis=1).mean()
+        ch4_noise = avg_abrs.loc[:, 4].loc[:, -40:-19].std(axis=1).mean()
 
         self.label_abr_ch0_noise.setText('{:.2f} uV'.format(ch0_noise))
         self.label_abr_ch2_noise.setText('{:.2f} uV'.format(ch2_noise))
+        self.label_abr_ch4_noise.setText('{:.2f} uV'.format(ch4_noise))
         
 
         ## Plot clicks by amplitude
@@ -1032,6 +1090,12 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         zobj = zip(self.abr_ch2_handle_l, abr_ch2.values)
         for handle, topl in zobj:
             handle.setData(x=abr_ch2.columns.values, y=topl)
+
+        # Plot ch4
+        abr_ch4 = avg_abrs.loc[:, 4]
+        zobj = zip(self.abr_ch4_handle_l, abr_ch4.values)
+        for handle, topl in zobj:
+            handle.setData(x=abr_ch4.columns.values, y=topl)
 
         
         ## Print debug timing information

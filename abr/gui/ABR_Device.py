@@ -53,7 +53,7 @@ class ABR_Device(object):
         ## Store parameters
         # Currently not supported to change the sampling rate or gains
         self.sampling_rate = 16000
-        self.gains = [24, 1, 24, 1, 1, 1, 1, 1] # must be list to be json
+        self.gains = [24, 1, 24, 1, 24, 1, 1, 1] # must be list to be json
 
         # Control verbosity
         self.verbose = verbose
@@ -703,6 +703,21 @@ class ThreadedSerialReader(object):
         
         # Log
         self.n_packets_read += 1
+        
+        # When the buffer fills, what seems to happen is that the next packet
+        # is fine, then the following packet starts out fine but ends corrupted,
+        # then the following packet starts out corrupted, then we get back
+        # on track. So probably the buffer can hold >1 but <2 packets, and
+        # when the second packet is read, the end of it is some random chunk
+        # of another packet.
+        # The buffer might be 20132 (16018 + 4114). 
+        # After the first packet is read, the second packet is only 4114 long, 
+        # then it reads 11904 from the next packet to arrive, then the last
+        # 4114 of that packet are dropped.
+
+        #~ # Debug: intentionally break
+        #~ if self.n_packets_read == 10:
+            #~ time.sleep(.5)
 
     def capture(self):
         """Target of the thread
