@@ -41,7 +41,7 @@ import paclab.abr.abr
 class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
     def __init__(self, 
         abr_device, 
-        update_interval_ms=100, # it can't really go any faster
+        update_interval_ms=250, # it can't really go any faster
         duration_data_to_analyze_s=300, 
         neural_scope_xrange_s=5,
         neural_scope_yrange_uV=200000, # max achievable is 187500 at gain=24
@@ -1142,8 +1142,8 @@ class MainWindow(PyQt5.QtWidgets.QMainWindow):
             serial_port='/dev/ttyACM0', 
             serial_baudrate=115200, 
             serial_timeout=0.1,
-            abr_data_path='/home/mouse/abr_data',
-            data_in_memory_duration_s=240,
+            abr_data_path='/home/mouse/mnt/cuttlefish/surgery/abr_data',
+            data_in_memory_duration_s=60,
             experimenter=self.experimenter,
             )        
         
