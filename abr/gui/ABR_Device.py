@@ -34,6 +34,8 @@ class ABR_Device(object):
         
         serial_baudrate : numeric
             Baudrate to use
+            I suspect this is ignored. The actual data transfer rate is
+            16KHz * 8ch * 4B = 512KB/s, well over this baudrate.
         
         serial_timeout : numeric
             Time to wait for a message from the serial port before returning
@@ -728,6 +730,14 @@ class ThreadedSerialReader(object):
             if self.verbose:
                 print(f'deqlen: {len(self.deq_data)}')
             self.read_and_append()
+            
+            #~ if self.n_packets_read == 10:
+                #~ print('simulating pause')
+                #~ # It seems like after this pause we get the next two packets, then a
+                #~ # gap, then packets continue. But never a partial packet.
+                #~ # Perhaps two packets fills the buffer, and after that all messages are
+                #~ # simply dropped silently until there is space again.
+                #~ time.sleep(1)
         
         # self.keep_reading has been set False
         # Read any last chunks

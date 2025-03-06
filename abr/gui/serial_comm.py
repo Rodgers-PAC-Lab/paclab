@@ -198,6 +198,7 @@ def read_and_classify_packet(
                 # In most cases, we get 16000 or 0 bytes
                 # But in some cases, we get only 4096
                 payload_bytes += ser.read(16000 - len(payload_bytes))
+                # print('re-reading')
             else:
                 break
             
