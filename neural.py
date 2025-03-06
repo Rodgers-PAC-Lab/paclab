@@ -67,19 +67,101 @@ def load_analog_data(analog_packed_filename):
     
     return analog_mm
 
-def load_neural_data(neural_packed_filename):
+def load_neural_data(neural_packed_filename, n_channels, offset=8):
+    """Memmap packed neural data
+    
+    neural_packed_filename : str
+        Path to neural data
+    
+    n_channels : int
+    
+    offset : int
+        This is 8 for White Matter data
+    
+    Returns : memmap
+        It will have `n_channels` columns
+    """
+    # Calculate size of file in bytes
     packed_file_size_bytes = os.path.getsize(neural_packed_filename)
-    packed_file_size_samples = (packed_file_size_bytes - 8) // 64 // 2
-    assert packed_file_size_samples * 64 * 2 + 8 == packed_file_size_bytes
+    
+    # Calculate length of recording in samples
+    packed_file_size_samples = (
+        (packed_file_size_bytes - offset) // n_channels // 2)
+    
+    # Check file size makes sense
+    expected_size = packed_file_size_samples * n_channels * 2 + offset
+    if expected_size != packed_file_size_bytes:
+        raise ValueError(
+            f'file was {packed_file_size_bytes} but it should have been '
+            f'{expected_size} bytes')
+    
+    # Memmap
     neural_mm = np.memmap(
         neural_packed_filename, 
         np.int16, 
         'r', 
-        offset=8,
-        shape=(packed_file_size_samples, 64)
+        offset=offset,
+        shape=(packed_file_size_samples, n_channels)
     )   
     
     return neural_mm
+
+def load_open_ephys_data(directory, recording_idx=0, convert_to_microvolts=True):
+    """Load OpenEphys data
+    
+    For debugging (i.e., determining how many recording_idx there are, try
+        session = open_ephys.analysis.Session(directory)
+    I think len(session.recordnodes) is always 1 for our setup
+    sesion.recordnodes.recordings is a list of recordings. The distinction
+    between experiments and recordings is ignored, it's just a simple list.
+    
+    TODO: how do you get the start time of each recording?
+    
+    directory : path to session
+    recording_idx : int, which recording to get
+    convert_to_microvolts : bool
+        If True, neural_data and analog_data are converted to microvolts
+        and volts, respectively
+        If False, they are left as memmap (in bit-levels)
+    
+    Returns: dict
+        'metadata': includes conversion factor bit_volts
+        'timestamps': memmap of timestamps in seconds
+        'neural_data': all neural data (columns are channels)
+        'analog_data': all analog data (columns are channels)
+    """
+    # Hide this import here because it's uncommon
+    import open_ephys.analysis
+    
+    # Form session
+    session = open_ephys.analysis.Session(directory)
+    n_recordings = len(session.recordnodes[0].recordings)
+
+    # Extract data
+    metadata = session.recordnodes[0].recordings[
+        recording_idx].continuous[0].metadata
+    timestamps = session.recordnodes[0].recordings[
+        recording_idx].continuous[0].timestamps
+    data = session.recordnodes[0].recordings[
+        recording_idx].continuous[0].samples
+
+    # Split into neural and analog
+    # The channel names are in metadata['channel_names']
+    neural_data = data[:, :-8]
+    analog_data = data[:, -8:]
+
+    # Convert to array and get into physical units
+    if convert_to_microvolts:
+        neural_data = neural_data * metadata['bit_volts'][0]
+        analog_data = analog_data * metadata['bit_volts'][-1]
+    
+    # Return
+    return {
+        'metadata': metadata,
+        'timestamps': timestamps,
+        'neural_data': neural_data,
+        'analog_data': analog_data,
+        }
 
 def get_video_start_time(*args, **kwargs):
     # only for deprecations below
