@@ -5,9 +5,11 @@ No GUI code here!
 
 import collections
 import threading
+import multiprocessing
 import time
 import datetime
 import os
+import signal
 import json
 import serial
 from . import serial_comm
@@ -79,11 +81,16 @@ class ABR_Device(object):
         self.tfw = None
     
     def run_session(self):
+        dt_start = datetime.datetime.now()
         self.start_session()
         
         try:
             while True:
                 time.sleep(.1)
+                
+                if datetime.datetime.now() > dt_start + datetime.timedelta(seconds=6):
+                    print('reached 6 second shutdown')
+                    break
         
         except KeyboardInterrupt:
             print('received CTRL+C, shutting down')
@@ -196,133 +203,218 @@ class ABR_Device(object):
         
         ## These steps only occur if we're in live mode
         if replay_filename is None:
-            ## Open a serial connection to the teensy
-            self.ser = serial.Serial(
-                port=self.serial_port,
-                baudrate=self.serial_baudrate,
-                timeout=self.serial_timeout,
+            # Create the serial_reader object
+            self.serial_reader = MultiprocSerialReader(
+                serial_port=self.serial_port,
+                serial_timeout=self.serial_timeout,
+                gains=self.gains,
+                sampling_rate=self.sampling_rate,
+                verbose=False,
+                session_dir=self.session_dir,
+                session_dt_str=self.session_dt_str,
                 )
             
+            # Start it
+            self.proc = multiprocessing.Process(target=self.serial_reader.start_session)
+            print('starting')
+            self.proc.start()
             
-            ## Close out the previous session
-            print('flushing serial port')
+            # Continuously read data out of the mp queues and into a thread-safe
+            # deque
+            self.tqr = ThreadedQueueReader(
+                q_data=self.serial_reader.output_data,
+                q_headers=self.serial_reader.output_headers,
+                )
             
-            # Flush
-            self.ser.flushInput()
-            self.ser.flush()
+            # Start
+            self.tqr.start()
             
-            # Stop data acquisition if it's already happening
-            serial_comm.write_stop(
-                self.ser, warn_if_not_running=False, warn_if_running=True)
-            
-            
-            ## Query the serial port
-            # Just a consistency check because the answer should always be the same
-            query_res = serial_comm.write_query(self.ser)
-
-
-            ## Set parameters
-            # Form the command
-            # TODO: document these other parameters
-            str_gains = ','.join([str(gain) for gain in self.gains])
-            cmd_str = f'U,8,{self.sampling_rate},0,{str_gains};'
-            
-            # Log
-            print(f'setting parameters: {cmd_str}')
-            
-            # Log the configs that were used
-            to_json = query_res['message']
-            
-            # Store configs from this object
-            to_json['gains'] = self.gains
-            to_json['sampling_rate'] = self.sampling_rate
-            to_json['session_start_time'] = self.session_dt_str
-            
-            # Mistakenly, this was int64 in early versions of this software
-            # There is currently no support for changing the output_dtype
-            # This makes the output_dtype explicit, and also works as a flag
-            # for when this fix went into effect
-            to_json['output_dtype'] = 'int32'
-            
-            # Write the config file
-            with open(os.path.join(self.session_dir, 'config.json'), 'w') as fi:
-                json.dump(to_json, fi)
-                
-            # Send the command
-            serial_comm.write_setupU(self.ser, cmd_str)
-
-
-            ## Tell it to start
-            print('starting acquisition...')
-            serial_comm.write_start(self.ser)
-
-            
-            ## Start acquiring
-            self.tsr = ThreadedSerialReader(self.ser, verbose=False)
-            self.tsr.start()
-
-
-            ## Start the TFW
-            # This parameter determines how much data is kept in memory before
-            # writing to disk
-            # We want to make sure at least that many chunks are kept in the deque
-            # before writing out
-            minimum_deq_length = int(np.rint(
-                self.data_in_memory_duration_s * self.sampling_rate / 500))
-            
-            # Create tfw
+            # Continuously write data from the tqr to disk
             self.tfw = ThreadedFileWriter(
-                self.tsr.deq_data, 
-                self.tsr.deq_headers,
-                verbose=False,
+                deq_data=self.tqr.deq_data, 
+                deq_headers=self.tqr.deq_headers, 
                 output_filename=os.path.join(self.session_dir, 'data.bin'),
                 output_header_filename=os.path.join(self.session_dir, 'packet_headers.csv'),
-                minimum_deq_length=minimum_deq_length,
                 )
-            self.tfw.start()
-        
-        else:
-            ## This is the canned mode
-            # In this case the deque will never be emptied
-            # TODO: initialize a dummy ThreadedFileWriter to do nothing
-            # but empty the deque
-            self.tsr = ThreadedFileReader(replay_filename)
-            self.tsr.start()
-
-
-            ## Start the TFW
-            # This parameter determines how much data is kept in memory before
-            # writing to disk
-            # We want to make sure at least that many chunks are kept in the deque
-            # before writing out
-            minimum_deq_length = int(np.rint(
-                self.data_in_memory_duration_s * self.sampling_rate / 500))
             
-            # Create tfw
-            self.tfw = ThreadedFileWriter(
-                self.tsr.deq_data, 
-                self.tsr.deq_headers,
-                verbose=False,
-                output_filename=None,
-                output_header_filename=None,
-                minimum_deq_length=minimum_deq_length,
-                )
-            self.tfw.start()            
+            self.tfw.start()
+                
+        
+        print('done with ABR_device.start_session')
 
     def stop_session(self):
-        print('stopping abr session...')
-        # Tell the thread to stop reading - it will keep reading until the 
-        # serial buffer is empty though
-        # I think because of the `join`, this will block until the serial
-        # buffer is empty
-        if self.tsr is not None:
-            self.tsr.stop()
+        print('ABR_device stopping abr session...')
+        # Tell the serial_reader to stop reading
+        print('setting stop event')
+        self.serial_reader.stop_event.set()
         
-        # Wait for the file writer finish - this just empties the deq, and
-        # is insensitive to serial traffic
-        if self.tfw is not None:
-            self.tfw.stop()
+        # Wait for it to complete
+        # Might take a little while because it has to send the stop message, etc
+        time.sleep(1)
         
+        # Tell the threaded_queue_reader to stop
+        print('stopping tqr')
+        self.tqr.keep_reading = False
+        
+        # Wait for it to complete
+        # This one should be fast
+        time.sleep(0.1)
+        
+        # Join on the serial_reader (this will hang until all data is read out)
+        print('joining')
+        self.proc.join(timeout=1)
+        if self.proc.is_alive():
+            print('killing')
+            self.proc.terminate()
+
+        # Tell the writer to stop
+        self.tfw.stop()
+        
+        print('done')    
+
+class MultiprocSerialReader(object):
+    def __init__(self, serial_port, serial_timeout, gains, sampling_rate, 
+        session_dir, session_dt_str, verbose=True):
+        # Store params
+        self.serial_port = serial_port
+        self.serial_timeout = serial_timeout
+        self.gains = gains
+        self.sampling_rate = sampling_rate
+        self.verbose = verbose
+        self.session_dir = session_dir
+        self.session_dt_str = session_dt_str
+        
+        # Output goes here
+        self.output_data = multiprocessing.Queue()
+        self.output_headers = multiprocessing.Queue()
+        
+        # Diagnostics
+        self.late_reads = 0
+        self.n_packets_read = 0
+        
+        # This is the flag used for stopping
+        self.stop_event = multiprocessing.Event()
+    
+    def start_session(self):
+        """Target of the thread
+        
+        This runs until stop_event is detected
+        """
+        ## Have the child process ignore CTRL+C
+        # Otherwise CTRL+C as a message to stop the main proc also stops this
+        # one in an awkard place
+        # A side effect of this may be to make it harder to kill this process
+        # May want to comment this out for full GUI operation
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        
+        
+        ## Create port
+        self.ser = serial.Serial(
+            port=self.serial_port,
+            timeout=self.serial_timeout,
+            )
+        
+        
+        ## Close out the previous session
+        print('flushing serial port')
+        
+        # Flush
+        self.ser.flushInput()
+        self.ser.flush()
+        
+        # Stop data acquisition if it's already happening
+        serial_comm.write_stop(
+            self.ser, warn_if_not_running=False, warn_if_running=True)
+        
+        
+        ## Query the serial port
+        # Just a consistency check because the answer should always be the same
+        query_res = serial_comm.write_query(self.ser)
+
+
+        ## Set parameters
+        # Form the command
+        # TODO: document these other parameters
+        str_gains = ','.join([str(gain) for gain in self.gains])
+        cmd_str = f'U,8,{self.sampling_rate},0,{str_gains};'
+        
+        # Log
+        print(f'setting parameters: {cmd_str}')
+        
+        # Log the configs that were used
+        to_json = query_res['message']
+        
+        # Store configs from this object
+        to_json['gains'] = self.gains
+        to_json['sampling_rate'] = self.sampling_rate
+        to_json['session_start_time'] = self.session_dt_str
+        
+        # Mistakenly, this was int64 in early versions of this software
+        # There is currently no support for changing the output_dtype
+        # This makes the output_dtype explicit, and also works as a flag
+        # for when this fix went into effect
+        to_json['output_dtype'] = 'int32'
+        
+        #~ # Write the config file
+        with open(os.path.join(self.session_dir, 'config.json'), 'w') as fi:
+            json.dump(to_json, fi)
+            
+        # Send the command
+        serial_comm.write_setupU(self.ser, cmd_str)
+
+
+        ## Tell it to start
+        print('starting acquisition...')
+        serial_comm.write_start(self.ser)
+        
+        
+        ## Capture until we are told to stop
+        while not self.stop_event.is_set():
+            try:
+                self.read_and_append()
+            except Exception as e:
+                print(f'ignoring {e}')
+                pass
+        
+        print('stop event detected')
+        
+        ## Stop event was set, so stop
+        self.stop_session()
+        
+        print('done with MultiprocSerialReader.start_session')
+
+    def read_and_append(self):
+        # Read a data packet
+        # Relatively long wait_time here, in hopes that if something is
+        # screwed up we can find sync bytes and get back on track
+        data_packet = serial_comm.read_and_classify_packet(
+            self.ser, wait_time=0.5, assert_packet_type='data')
+        
+        # If any data remains, this was a late read
+        in_waiting = self.ser.in_waiting
+        if in_waiting > 0:
+            print(f'late read! {in_waiting} bytes in waiting')
+            self.late_reads += 1  
+            data_packet['message']['late_read'] = True
+            data_packet['message']['in_waiting'] = in_waiting
+        else:
+            data_packet['message']['late_read'] = False
+            data_packet['message']['in_waiting'] = in_waiting
+            
+        # Store the time
+        if self.verbose:
+            print(f"read packet {data_packet['message']['packet_num']}")
+    
+        # put_nowait means put right away, else raise an exception
+        self.output_headers.put_nowait(data_packet['message'])
+        self.output_data.put_nowait(data_packet['payload'])
+        
+        # Log
+        self.n_packets_read += 1
+
+    def stop_session(self):
+        print('MultiProc stopping abr session...')
+
         # These steps can only be taken if the serial port was created, which
         # doesn't happen for errors that occur on startup
         if self.ser is not None:
@@ -335,6 +427,7 @@ class ABR_Device(object):
             print('error: cannot close serial port because it was never created')
         
         print("abr device closed")
+    
 
 class ThreadedFileWriter(object):
     def __init__(self, 
@@ -640,81 +733,29 @@ class ThreadedFileReader(object):
         if self.thread is not None:
             self.thread.join()
 
-class ThreadedSerialReader(object):
-    """Instantiates a thread to constantly read from serial into a deque
+class ThreadedQueueReader(object):
+    """Instantiates a thread to constantly read from multiproc qs into deques
     
-    self.ser : serial.Serial, provided by user
+    One deque will be provided to the GUI
+    Another deque will be provided to the ThreadedFileWriter
 
-    self.deq : collections.deque
-        Data will be appended to the right side as it comes in
-        The oldest data will be on the left
-
-    self.late_reads : int
-        The number of times that more than one packet of data was
-        available. This should ideally never happen, because the buffer
-        overflows around 65000 bytes or so, which is just a few packets
-    
-    self.thread : the thread that reads
     """
-    def __init__(self, ser, verbose=False):
+    def __init__(self, q_data, q_headers, verbose=False):
         """Instatiate a new ThreadedSerialReader
         
         ser : serial.Serial
             Data will be read from this object and stored in self.deq
         """
-        self.deq_headers = collections.deque()
+        self.q_data = q_data
+        self.q_headers = q_headers
         self.deq_data = collections.deque()
-        self.ser = ser
+        self.deq_headers = collections.deque()
+        
         self.keep_reading = True
-        self.late_reads = 0
         self.n_packets_read = 0
         self.thread = None
         self.verbose = verbose
     
-    def read_and_append(self):
-        # Read a data packet
-        # Relatively long wait_time here, in hopes that if something is
-        # screwed up we can find sync bytes and get back on track
-        data_packet = serial_comm.read_and_classify_packet(
-            self.ser, wait_time=0.5, assert_packet_type='data')
-        
-        # If any data remains, this was a late read
-        in_waiting = self.ser.in_waiting
-        if in_waiting > 0:
-            print(f'late read! {in_waiting} bytes in waiting')
-            self.late_reads += 1  
-            data_packet['message']['late_read'] = True
-            data_packet['message']['in_waiting'] = in_waiting
-        else:
-            data_packet['message']['late_read'] = False
-            data_packet['message']['in_waiting'] = in_waiting
-            
-        # Store the time
-        if self.verbose:
-            print(f"read packet {data_packet['message']['packet_num']}")
-    
-        # Append to the left side of the deque
-        self.deq_headers.append(data_packet['message'])
-        self.deq_data.append(data_packet['payload'])
-        
-        # Log
-        self.n_packets_read += 1
-        
-        # When the buffer fills, what seems to happen is that the next packet
-        # is fine, then the following packet starts out fine but ends corrupted,
-        # then the following packet starts out corrupted, then we get back
-        # on track. So probably the buffer can hold >1 but <2 packets, and
-        # when the second packet is read, the end of it is some random chunk
-        # of another packet.
-        # The buffer might be 20132 (16018 + 4114). 
-        # After the first packet is read, the second packet is only 4114 long, 
-        # then it reads 11904 from the next packet to arrive, then the last
-        # 4114 of that packet are dropped.
-
-        #~ # Debug: intentionally break
-        #~ if self.n_packets_read == 10:
-            #~ time.sleep(.5)
-
     def capture(self):
         """Target of the thread
         
@@ -725,27 +766,35 @@ class ThreadedSerialReader(object):
         Once self.keep_reading is False, read any last chunks, 
         and then return.
         """
-        # Continue as long as self.keep_reading
+        # Continue as long as self.keep_reading 
+        # Make sure keep_reading is set False after the upstream q is shut
+        # down, otherwise we won't get the last bit of data
         while self.keep_reading:
-            if self.verbose:
-                print(f'deqlen: {len(self.deq_data)}')
-            self.read_and_append()
+            # Try to add a header
+            try:
+                header = self.q_headers.get_nowait()
+            except multiprocessing.queues.Empty:
+                header = None
             
-            #~ if self.n_packets_read == 10:
-                #~ print('simulating pause')
-                #~ # It seems like after this pause we get the next two packets, then a
-                #~ # gap, then packets continue. But never a partial packet.
-                #~ # Perhaps two packets fills the buffer, and after that all messages are
-                #~ # simply dropped silently until there is space again.
-                #~ time.sleep(1)
-        
-        # self.keep_reading has been set False
-        # Read any last chunks
-        while self.ser.in_waiting > 0:
-            # Probably should only do this once, because if it's more than
-            # one, something has gone wrong 
-            self.read_and_append()
-    
+            if header is not None:
+                # Append to left side
+                self.deq_headers.append(header)
+            
+            # Try to add a packet of data
+            try:
+                data = self.q_data.get_nowait()
+            except multiprocessing.queues.Empty:
+                data = None
+            
+            if data is not None:
+                # Append to left side
+                self.deq_data.append(data)
+            
+            # If we didn't get any data, sleep for a bit
+            if header is None or data is None:
+                time.sleep(0.3)
+            
+   
     def start(self):
         """Start the capture of data"""
         self.thread = threading.Thread(target=self.capture)
