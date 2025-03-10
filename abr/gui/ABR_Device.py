@@ -34,6 +34,8 @@ class ABR_Device(object):
         
         serial_baudrate : numeric
             Baudrate to use
+            I suspect this is ignored. The actual data transfer rate is
+            16KHz * 8ch * 4B = 512KB/s, well over this baudrate.
         
         serial_timeout : numeric
             Time to wait for a message from the serial port before returning
@@ -698,8 +700,20 @@ class ThreadedSerialReader(object):
         # Log
         self.n_packets_read += 1
         
-        #if self.n_packets_read == 10:
-        #    time.sleep(.5)
+        # When the buffer fills, what seems to happen is that the next packet
+        # is fine, then the following packet starts out fine but ends corrupted,
+        # then the following packet starts out corrupted, then we get back
+        # on track. So probably the buffer can hold >1 but <2 packets, and
+        # when the second packet is read, the end of it is some random chunk
+        # of another packet.
+        # The buffer might be 20132 (16018 + 4114). 
+        # After the first packet is read, the second packet is only 4114 long, 
+        # then it reads 11904 from the next packet to arrive, then the last
+        # 4114 of that packet are dropped.
+
+        #~ # Debug: intentionally break
+        #~ if self.n_packets_read == 10:
+            #~ time.sleep(.5)
 
     def capture(self):
         """Target of the thread
@@ -716,6 +730,14 @@ class ThreadedSerialReader(object):
             if self.verbose:
                 print(f'deqlen: {len(self.deq_data)}')
             self.read_and_append()
+            
+            #~ if self.n_packets_read == 10:
+                #~ print('simulating pause')
+                #~ # It seems like after this pause we get the next two packets, then a
+                #~ # gap, then packets continue. But never a partial packet.
+                #~ # Perhaps two packets fills the buffer, and after that all messages are
+                #~ # simply dropped silently until there is space again.
+                #~ time.sleep(1)
         
         # self.keep_reading has been set False
         # Read any last chunks

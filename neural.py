@@ -89,9 +89,11 @@ def load_neural_data(neural_packed_filename, n_channels, offset=8):
         (packed_file_size_bytes - offset) // n_channels // 2)
     
     # Check file size makes sense
-    assert (
-        packed_file_size_samples * n_channels * 2 + offset == 
-        packed_file_size_bytes)
+    expected_size = packed_file_size_samples * n_channels * 2 + offset
+    if expected_size != packed_file_size_bytes:
+        raise ValueError(
+            f'file was {packed_file_size_bytes} but it should have been '
+            f'{expected_size} bytes')
     
     # Memmap
     neural_mm = np.memmap(
