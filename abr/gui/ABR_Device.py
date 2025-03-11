@@ -323,12 +323,14 @@ class MultiprocSerialReader(object):
         self.ser.flush()
         
         # Stop data acquisition if it's already happening
+        print('writing stop')
         serial_comm.write_stop(
             self.ser, warn_if_not_running=False, warn_if_running=True)
         
         
         ## Query the serial port
         # Just a consistency check because the answer should always be the same
+        print('querying')
         query_res = serial_comm.write_query(self.ser)
 
 
@@ -355,7 +357,7 @@ class MultiprocSerialReader(object):
         # for when this fix went into effect
         to_json['output_dtype'] = 'int32'
         
-        #~ # Write the config file
+        # Write the config file
         with open(os.path.join(self.session_dir, 'config.json'), 'w') as fi:
             json.dump(to_json, fi)
             
