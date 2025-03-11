@@ -12,6 +12,7 @@ make a mean ABR
 Timing parameters:
 OscilloscopeWidget.update_interval_ms
     milliseconds between update calls to all plotting objects
+    This should be sufficiently longer than the actual time taken
 
 MainWindow.update_interval_ms
     milliseconds between update calls to main window (just text boxes)
@@ -50,7 +51,7 @@ import paclab.abr.abr
 class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
     def __init__(self, 
         abr_device, 
-        update_interval_ms=250,
+        update_interval_ms=500,
         duration_data_to_analyze_s=60, 
         neural_scope_xrange_s=5,
         neural_scope_yrange_uV=200000, # max achievable is 187500 at gain=24
