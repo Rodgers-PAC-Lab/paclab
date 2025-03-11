@@ -694,15 +694,6 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
             self.duration_data_to_analyze_s * self.abr_device.sampling_rate / 500
             ))
         
-        # It's filled from the right by ThreadedSerialReader
-        # And emptied from the left by ThreadedFileWriter, which won't empty
-        #   it below a certain minimum length
-        # We can't get more than minimum deq_length
-        if self.abr_device.tfw is not None:
-            # This guard is needed because we don't have a dummy TFW yet
-            if needed_chunks > self.abr_device.tfw.minimum_deq_length:
-                needed_chunks = self.abr_device.tfw.minimum_deq_length
-
         # We can't get more data than there is available
         n_chunks_available = len(self.abr_device.deq_data)
         if needed_chunks > n_chunks_available:
@@ -716,7 +707,8 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         # because the index is still valid. But if data is also emptied from
         # the left, the data will tear. Fortunately emptying from the left
         # is more rare.
-        # TODO: use a lock here to prevent that
+        # TODO: this deq is no longer emptied by anyone. Faster way than
+        # re-reading the whole thing all the time?
         data_chunk_l = []
         data_header_l = []
         for idx in range(n_chunks_available - needed_chunks, n_chunks_available):
