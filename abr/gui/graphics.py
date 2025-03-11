@@ -10,11 +10,20 @@ invert color order in ABR plot
 make a mean ABR
 
 Timing parameters:
-ABR_Device.data_in_memory_duration_s
 OscilloscopeWidget.update_interval_ms
-MainWindow.update_interval_ms
-time.sleep in ThreadedFileWriter
+    milliseconds between update calls to all plotting objects
 
+MainWindow.update_interval_ms
+    milliseconds between update calls to main window (just text boxes)
+    
+OscilloscopeWidget.duration_data_to_analyze_s
+    Seconds of data to load from the deq
+    As this gets longer, we have more information to compute the ABR, but
+    it will take longer to analyze.
+    The text label "data analyzed (s)" indicates how much is being used by
+    the GUI, which will be at most this.
+
+time taken and debug timing interval
 """
 
 import sys
@@ -41,8 +50,8 @@ import paclab.abr.abr
 class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
     def __init__(self, 
         abr_device, 
-        update_interval_ms=50, # it can't really go any faster
-        duration_data_to_analyze_s=300, 
+        update_interval_ms=250,
+        duration_data_to_analyze_s=60, 
         neural_scope_xrange_s=5,
         neural_scope_yrange_uV=200000, # max achievable is 187500 at gain=24
         highpass_neural_scope_yrange_uV=30, # should have stdev ~1 uV
@@ -93,7 +102,7 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         self.heart_rate = -1
         
         # Debug
-        self.print_timing_information = False
+        self.print_timing_information = True
         
         
         ## ABR extraction parameters
@@ -695,12 +704,13 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
             ))
         
         # We can't get more data than there is available
-        n_chunks_available = len(self.abr_device.deq_data)
+        # The -1 keeps us from ever getting the most recent one
+        n_chunks_available = len(self.abr_device.deq_data) - 1
         if needed_chunks > n_chunks_available:
             needed_chunks = n_chunks_available
         
         # Return if no data available
-        if needed_chunks == 0:
+        if needed_chunks <= 0:
             return None, None, None
         
         # If data is added to the right during this operation, it won't matter
@@ -1103,8 +1113,8 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         # Average over times
         self.times_l.append(times)
         concatted = pandas.concat(
-            self.times_l, 
-            keys=range(len(self.times_l)), 
+            self.times_l[-20:], 
+            keys=range(len(self.times_l[-20:])), 
             names=['rep'])
         meaned = concatted.groupby('event')['diff'].mean()
 
@@ -1135,7 +1145,6 @@ class MainWindow(PyQt5.QtWidgets.QMainWindow):
             serial_baudrate=115200, 
             serial_timeout=0.1,
             abr_data_path='/home/mouse/mnt/cuttlefish/surgery/abr_data',
-            data_in_memory_duration_s=180,
             experimenter=self.experimenter,
             )        
         

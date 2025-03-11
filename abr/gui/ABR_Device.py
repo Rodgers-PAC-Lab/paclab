@@ -23,7 +23,6 @@ class ABR_Device(object):
         serial_baudrate=115200, 
         serial_timeout=0.1,
         abr_data_path='/home/mouse/mnt/cuttlefish/surgery/abr_data',
-        data_in_memory_duration_s=60,
         experimenter='mouse',
         ):
         """Initialize a new ABR_Device object to collect ABR data.
@@ -44,13 +43,6 @@ class ABR_Device(object):
         
         abr_data_path : str
             Path to root directory to store data in
-        
-        data_in_memory_duration_s : numeric
-            No data will be removed from the deque in memory and written to
-            disk until the length of the deque exceeds this amount. This is
-            also the maximum amount of data that can be analyzed by the GUI.
-            Increasing this value gives a more accurate representation of the
-            ABR, but it will slow GUI updates, and delay writing to disk. 
         """
         ## Store parameters
         # Currently not supported to change the sampling rate or gains
@@ -69,9 +61,6 @@ class ABR_Device(object):
         self.abr_data_path = abr_data_path
         self.experimenter = experimenter
         self.session_dir = None # until set
-        
-        # How much data to keep in memory
-        self.data_in_memory_duration_s = data_in_memory_duration_s
         
         
         ## Instance variables
@@ -440,7 +429,7 @@ class MultiprocSerialReader(object):
 class ThreadedFileWriter(object):
     def __init__(self, 
         deq_data, deq_headers, output_filename, output_header_filename,
-        minimum_deq_length=1000, verbose=False):
+        minimum_deq_length=10, verbose=False):
         """Initialize a new ThreadedFileWriter
 
         Pops data from the left side of deq_data and writes to disk.
@@ -463,7 +452,8 @@ class ThreadedFileWriter(object):
 
         minimum_deq_length : int
             If len(deq) < minimum_deq_length, no data will be popped or written
-            This ensure there is always recent data to visualize
+            This is probably no longer necessary, since we don't analyze data
+            in tfw
         """
         # Store
         self.output_filename = output_filename
