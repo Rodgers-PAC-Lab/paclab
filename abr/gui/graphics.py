@@ -41,7 +41,7 @@ import paclab.abr.abr
 class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
     def __init__(self, 
         abr_device, 
-        update_interval_ms=250, # it can't really go any faster
+        update_interval_ms=50, # it can't really go any faster
         duration_data_to_analyze_s=300, 
         neural_scope_xrange_s=5,
         neural_scope_yrange_uV=200000, # max achievable is 187500 at gain=24
@@ -704,7 +704,7 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
                 needed_chunks = self.abr_device.tfw.minimum_deq_length
 
         # We can't get more data than there is available
-        n_chunks_available = len(self.abr_device.tsr.deq_data)
+        n_chunks_available = len(self.abr_device.deq_data)
         if needed_chunks > n_chunks_available:
             needed_chunks = n_chunks_available
         
@@ -720,8 +720,8 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         data_chunk_l = []
         data_header_l = []
         for idx in range(n_chunks_available - needed_chunks, n_chunks_available):
-            data_chunk = self.abr_device.tsr.deq_data[idx]
-            data_header = self.abr_device.tsr.deq_headers[idx]
+            data_chunk = self.abr_device.deq_data[idx]
+            data_header = self.abr_device.deq_header[idx]
             
             # Store
             data_chunk_l.append(data_chunk)
@@ -1143,7 +1143,7 @@ class MainWindow(PyQt5.QtWidgets.QMainWindow):
             serial_baudrate=115200, 
             serial_timeout=0.1,
             abr_data_path='/home/mouse/mnt/cuttlefish/surgery/abr_data',
-            data_in_memory_duration_s=60,
+            data_in_memory_duration_s=180,
             experimenter=self.experimenter,
             )        
         
@@ -1452,15 +1452,15 @@ class MainWindow(PyQt5.QtWidgets.QMainWindow):
         if self.abr_device.session_dir is not None:
             self.label_session_dir.setText(self.abr_device.session_dir)
         
-        if self.abr_device.tsr is not None:
-            self.label_data_collected_s.setText('{:.1f}'.format(
-                self.abr_device.tsr.n_packets_read * 500 / 16000))
+        if self.abr_device.deq_data is not None:
+            #~ self.label_data_collected_s.setText('{:.1f}'.format(
+                #~ self.abr_device.tsr.n_packets_read * 500 / 16000))
 
             self.label_packets_in_memory.setText(str(
-                len(self.abr_device.tsr.deq_data)))
+                len(self.abr_device.deq_data)))
             
-            self.label_n_late_reads.setText(str(
-                self.abr_device.tsr.late_reads))
+            #~ self.label_n_late_reads.setText(str(
+                #~ self.abr_device.tsr.late_reads))
             
         
         #~ self.label_data_written_s = str(

@@ -88,9 +88,9 @@ class ABR_Device(object):
             while True:
                 time.sleep(.1)
                 
-                if datetime.datetime.now() > dt_start + datetime.timedelta(seconds=6):
-                    print('reached 6 second shutdown')
-                    break
+                #~ if datetime.datetime.now() > dt_start + datetime.timedelta(seconds=6):
+                    #~ print('reached 6 second shutdown')
+                    #~ break
         
         except KeyboardInterrupt:
             print('received CTRL+C, shutting down')
@@ -226,19 +226,25 @@ class ABR_Device(object):
                 q_headers=self.serial_reader.output_headers,
                 )
             
+            # Get the default output deqs, which are for gui
+            self.deq_header = self.tqr.deq_header
+            self.deq_data = self.tqr.deq_data
+            
+            # Get outputs for threaded file writer
+            tfw_deq_header, tfw_deq_data = self.tqr.get_output_deqs()
+            
             # Start
             self.tqr.start()
             
-            # Continuously write data from the tqr to disk
+            # Continuously write data from the tfw_deqs to disk
             self.tfw = ThreadedFileWriter(
-                deq_data=self.tqr.deq_data, 
-                deq_headers=self.tqr.deq_headers, 
+                deq_data=tfw_deq_data,
+                deq_headers=tfw_deq_header,
                 output_filename=os.path.join(self.session_dir, 'data.bin'),
                 output_header_filename=os.path.join(self.session_dir, 'packet_headers.csv'),
                 )
             
             self.tfw.start()
-                
         
         print('done with ABR_device.start_session')
 
@@ -750,20 +756,42 @@ class ThreadedQueueReader(object):
         """
         self.q_data = q_data
         self.q_headers = q_headers
-        self.deq_data = collections.deque()
-        self.deq_headers = collections.deque()
-        
         self.keep_reading = True
         self.n_packets_read = 0
         self.thread = None
         self.verbose = verbose
+        
+        # This is a list of output deques
+        self.deq_data_l = []
+        self.deq_headers_l = []
+
+        # The first one is always initialized (this is the one the GUI uses
+        # Later ones are initialized on request
+        self.deq_header, self.deq_data = self.get_output_deqs()
+    
+    def get_output_deqs(self):
+        """Create and return new deques that will be filled with data
+        
+        Keeps a list of all output sources, including a default one
+        
+        Returns: new_deq_header, new_deq_data
+        """
+        # Create
+        new_deq_header = collections.deque()
+        new_deq_data = collections.deque()
+        
+        # Append
+        self.deq_headers_l.append(new_deq_header)
+        self.deq_data_l.append(new_deq_data)
+        
+        # Return
+        return new_deq_header, new_deq_data
     
     def capture(self):
         """Target of the thread
         
         As long as self.keep_reading is True, infinitely keep reading
         chunks of data and appending to the deq as they come in.
-        Keep track of any late reads.
         
         Once self.keep_reading is False, read any last chunks, 
         and then return.
@@ -772,7 +800,8 @@ class ThreadedQueueReader(object):
         # Make sure keep_reading is set False after the upstream q is shut
         # down, otherwise we won't get the last bit of data
         while self.keep_reading:
-            # Try to add a header
+            
+            ## Try to get a header
             try:
                 header = self.q_headers.get_nowait()
             except multiprocessing.queues.Empty:
@@ -780,9 +809,11 @@ class ThreadedQueueReader(object):
             
             if header is not None:
                 # Append to left side
-                self.deq_headers.append(header)
+                for deq_header in self.deq_headers_l:
+                    deq_header.append(header)
             
-            # Try to add a packet of data
+            
+            ## Try to get a packet of data
             try:
                 data = self.q_data.get_nowait()
             except multiprocessing.queues.Empty:
@@ -790,12 +821,15 @@ class ThreadedQueueReader(object):
             
             if data is not None:
                 # Append to left side
-                self.deq_data.append(data)
+                for deq_data in self.deq_data_l:
+                    deq_data.append(data)
             
-            # If we didn't get any data, sleep for a bit
+            
+            ## If we didn't get any data, sleep for a bit
             if header is None or data is None:
                 time.sleep(0.3)
-            
+        
+        # TODO: get any last chunks here
    
     def start(self):
         """Start the capture of data"""
