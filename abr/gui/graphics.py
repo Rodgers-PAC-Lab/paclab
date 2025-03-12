@@ -7,6 +7,7 @@ TODO:
 * invert color order in ABR plot
 * make a mean ABR
 * Handle close ABR window more nicely
+* ignore clicks on "stop session" if not running
 
 Timing parameters:
 * OscilloscopeWidget.update_interval_ms
@@ -59,6 +60,7 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         abr_audio_monitor_yrange_uV=5, # abslog scale
         abr_neural_yrange_uV=5,
         audio_extract_win_samples=10,
+        verbose=False,
         *args, **kwargs):
         
         ## Superclass PyQt5.QtWidgets.QWidget init
@@ -68,6 +70,7 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         ## Instance variables
         # abr_device, where the data comes from
         self.abr_device = abr_device
+        self.verbose = verbose
         
         # Timers for continuous updating
         # Create a PyQt5.QtCore.QTimer object to continuously update the plot         
@@ -850,8 +853,9 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         times.append(('data gotten 1', datetime.datetime.now()))
         
         # Continue if not enough
-        if big_data is None or len(big_data) < 1000:
-            print('warning: no data received!')
+        if big_data is None:
+            if self.verbose:
+                print('waiting to receive enough data to plot')
             return
 
         # Store the size of data received

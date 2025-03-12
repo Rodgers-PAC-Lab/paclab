@@ -140,7 +140,8 @@ class SerialReader(object):
         
         ## Query the serial port
         # Just a consistency check because the answer should always be the same
-        print(f'{datetime.datetime.now()}: querying')
+        if self.verbose:
+            print(f'{datetime.datetime.now()}: querying')
         query_res = serial_comm.write_query(self.ser)
 
 

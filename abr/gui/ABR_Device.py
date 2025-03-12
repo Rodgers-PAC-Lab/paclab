@@ -186,7 +186,8 @@ class ABR_Device(object):
         
         ## Log
         print('starting abr session...')
-        print(f'replay filename is {replay_filename}')        
+        if self.verbose:
+            print(f'replay filename is {replay_filename}')        
     
         # Store the datetime str for the current session
         self.session_dt_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -210,7 +211,7 @@ class ABR_Device(object):
                 serial_timeout=self.serial_timeout,
                 gains=self.gains,
                 sampling_rate=self.sampling_rate,
-                verbose=False,
+                verbose=self.verbose,
                 session_dir=self.session_dir,
                 session_dt_str=self.session_dt_str,
                 )
@@ -229,6 +230,7 @@ class ABR_Device(object):
             self.queue_popper = serial_io.QueuePopper(
                 q_data=self.serial_reader.q_data,
                 q_headers=self.serial_reader.q_header,
+                verbose=self.verbose,
                 )
             
             # Get the default output deqs, which are for gui
