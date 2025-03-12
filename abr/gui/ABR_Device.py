@@ -67,6 +67,9 @@ class ABR_Device(object):
         self.serial_reader = None
         self.file_writer = None
         self.queue_popper = None
+        
+        # Keep track of whether we're running
+        self.running = False
     
     def run_session(self):
         """Called in CLI mode to run a session
@@ -191,6 +194,9 @@ class ABR_Device(object):
     
         # Store the datetime str for the current session
         self.session_dt_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        # Keep track of whether we're running
+        self.running = True
     
        
         ## Depends on if we're in live mode
@@ -309,6 +315,9 @@ class ABR_Device(object):
         # Tell the writer to stop
         # This joins, so it blocks until it finishes
         self.file_writer.stop()
+        
+        # Keep track of whether we're running
+        self.running = False
         
         print('ABR_Device shutdown complete')    
 

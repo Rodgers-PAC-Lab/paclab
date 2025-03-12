@@ -329,17 +329,22 @@ class MainWindow(PyQt5.QtWidgets.QMainWindow):
         Can happen because stop button was clicked, or because an error
         occurred.
         """
-        # Stop the ABR device (serial port, etc)
-        self.abr_device.stop()
+        if self.abr_device.running:
+            # Stop the ABR device (serial port, etc)
+            self.abr_device.stop()
+            
+            # Stop updating the scope widgets
+            self.oscilloscope_widget.stop()
+            
+            # Stop updating the main window
+            self.timer_update.stop()
+            
+            # Set to False so we can start the session again
+            self.experiment_running = False
         
-        # Stop updating the scope widgets
-        self.oscilloscope_widget.stop()
-        
-        # Stop updating the main window
-        self.timer_update.stop()
-        
-        # Set to False so we can start the session again
-        self.experiment_running = False
+        else:
+            print(
+                'warning: ignoring stop command because session is not running')
 
     def update(self):
         # Set data labels
@@ -366,5 +371,9 @@ class MainWindow(PyQt5.QtWidgets.QMainWindow):
         Send 'exit' signal to all IP addresses bound to the GUI
         """
         # Stop ABR device
-        #self.abr_device.stop_session()
+        if self.abr_device.running:
+            print('warning: GUI closed while session was running')
+            self.abr_device.stop()
+        
+        # Not sure what this does
         event.accept()        

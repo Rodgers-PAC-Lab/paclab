@@ -6,8 +6,6 @@ TODO:
 * Allow flipping live switch
 * invert color order in ABR plot
 * make a mean ABR
-* Handle close ABR window more nicely
-* ignore clicks on "stop session" if not running
 
 Timing parameters:
 * OscilloscopeWidget.update_interval_ms
