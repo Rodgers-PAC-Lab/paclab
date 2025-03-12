@@ -1,46 +1,46 @@
 """Objects to run an ABR session
 
-No GUI code here!
+This module contains no GUI code. Everything should also run in a CLI.
+
+The only defined class is ABR_Device, which can run a recording session.
+In CLI mode, directly instantiate ABR_Device.
+In GUI mode, the MainWindow instantiates and owns it.
 """
 
-import collections
-import threading
 import multiprocessing
 import time
 import datetime
 import os
-import signal
-import json
-import serial
-from . import serial_comm
-import numpy as np
-import paclab.abr
+from . import serial_io
+from . import file_io
 
 class ABR_Device(object):
+    """Runs an ABR session
+    
+    Attributes
+    ---
+    serial_reader : serial_io.SerialReader  
+        Reads the data
+    file_writer : file_io.FileWriter
+        Writes the data
+    """
     def __init__(self, 
         verbose=True, 
         serial_port='/dev/ttyACM0', 
-        serial_baudrate=115200, 
         serial_timeout=0.1,
         abr_data_path='/home/mouse/mnt/cuttlefish/surgery/abr_data',
         experimenter='mouse',
         ):
         """Initialize a new ABR_Device object to collect ABR data.
         
+        Arguments
+        ---
         verbose : bool
             If True, write more debugging information
-        
         serial_port : str
             Path to serial port
-        
-        serial_baudrate : numeric
-            Baudrate to use
-            I suspect this is ignored. The actual data transfer rate is
-            16KHz * 8ch * 4B = 512KB/s, well over this baudrate.
-        
         serial_timeout : numeric
             Time to wait for a message from the serial port before returning
-        
         abr_data_path : str
             Path to root directory to store data in
         """
@@ -54,7 +54,6 @@ class ABR_Device(object):
         
         # Parameters to send to serial port
         self.serial_port = serial_port
-        self.serial_baudrate = serial_baudrate
         self.serial_timeout = serial_timeout
         
         # Where to save data
@@ -65,19 +64,23 @@ class ABR_Device(object):
         
         ## Instance variables
         # These are None until set
-        self.ser = None
-        self.tsr = None
-        self.tfw = None
+        self.serial_reader = None
+        self.file_writer = None
+        self.queue_popper = None
     
     def run_session(self):
-        dt_start = datetime.datetime.now()
-        self.start_session()
+        """Called in CLI mode to run a session
+        
+        Calls self.start(), waits until CTRL+C, calls self.stop()
+        """
+        self.start()
         
         try:
             while True:
                 time.sleep(.1)
                 
-                #~ if datetime.datetime.now() > dt_start + datetime.timedelta(seconds=6):
+                #~ if datetime.datetime.now() > (
+                    #~ dt_start + datetime.timedelta(seconds=6)):
                     #~ print('reached 6 second shutdown')
                     #~ break
         
@@ -171,29 +174,38 @@ class ABR_Device(object):
         
         return session_number, session_dir
         
-    def start_session(self, replay_filename=None):
+    def start(self, replay_filename=None):
+        """Start an ABR session
+        
+        Arguments
+        ---
+        replay_filename : path
+            If this is not None, replay data from this path instead of
+            reading from serial port.
+        """
+        
+        ## Log
         print('starting abr session...')
         print(f'replay filename is {replay_filename}')        
-        
-
-        ## Store the datetime str for the current session
+    
+        # Store the datetime str for the current session
         self.session_dt_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-
-
-        ## Define a session_name and create the session_directory
-        # Only create the output directory if this is a live session
+    
+       
+        ## Depends on if we're in live mode
         if replay_filename is None:
+            
+            ## Define a session_name and create the session_directory
             self.session_number, self.session_dir = (
                 self.determine_session_directory())
             
-            print(f'creating output directory {self.session_dir}')
+            if self.verbose:
+                print(f'creating output directory {self.session_dir}')
             os.mkdir(self.session_dir)
-        
-        
-        ## These steps only occur if we're in live mode
-        if replay_filename is None:
-            # Create the serial_reader object
-            self.serial_reader = MultiprocSerialReader(
+            
+            
+            ## Create the serial_reader object
+            self.serial_reader = SerialReader(
                 serial_port=self.serial_port,
                 serial_timeout=self.serial_timeout,
                 gains=self.gains,
@@ -203,67 +215,98 @@ class ABR_Device(object):
                 session_dt_str=self.session_dt_str,
                 )
             
-            # Start it
-            self.proc = multiprocessing.Process(target=self.serial_reader.start_session)
-            print('starting')
+            
+            ## Start acquistion in a separate Process
+            self.proc = multiprocessing.Process(target=self.serial_reader.start)
+            if self.verbose:
+                print('starting process')
             self.proc.start()
             
-            # Continuously read data out of the mp queues and into a thread-safe
-            # deque
-            self.tqr = ThreadedQueueReader(
+            
+            ## Create QueuePopper to pop data into deques
+            # Continuously read data out of the mp queues and into 
+            # thread-safe deques
+            self.queue_popper = serial_io.QueuePopper(
                 q_data=self.serial_reader.output_data,
                 q_headers=self.serial_reader.output_headers,
                 )
             
             # Get the default output deqs, which are for gui
-            self.deq_header = self.tqr.deq_header
-            self.deq_data = self.tqr.deq_data
+            self.deq_header = self.queue_popper.deq_header
+            self.deq_data = self.queue_popper.deq_data
             
             # Get outputs for threaded file writer
-            tfw_deq_header, tfw_deq_data = self.tqr.get_output_deqs()
+            # (Must do this before starting queue popper)
+            fw_deq_header, fw_deq_data = self.queue_popper.get_output_deqs()
             
-            # Start
-            self.tqr.start()
+            # Start the queue popper
+            self.queue_popper.start()
             
-            # Continuously write data from the tfw_deqs to disk
-            self.tfw = ThreadedFileWriter(
-                deq_data=tfw_deq_data,
-                deq_headers=tfw_deq_header,
-                output_filename=os.path.join(self.session_dir, 'data.bin'),
-                output_header_filename=os.path.join(self.session_dir, 'packet_headers.csv'),
+            
+            ## Continuously write data from the tfw_deqs to disk
+            output_filename = os.path.join(
+                self.session_dir, 'data.bin')
+            output_header_filename = os.path.join(
+                self.session_dir, 'packet_headers.csv'),
+            
+            # Create file_writer
+            self.file_writer = file_io.FileWriter(
+                deq_data=fw_deq_data,
+                deq_headers=fw_deq_header,
+                output_filename=output_filename,
+                output_header_filename=output_header_filename,
                 )
             
-            self.tfw.start()
+            # Start writing
+            self.file_writer.start()
         
-        print('done with ABR_device.start_session')
+        else:
+            # Implement replay mode here
+            pass
+        
+        if self.verbose:
+            print('done with ABR_device.start')
 
-    def stop_session(self):
-        print('ABR_device stopping abr session...')
+    def stop(self):
+        """Stop experiment
+        
+        Stops serial_reader
+        Stops queue_popper
+        
+        
+        """
+        if self.verbose:
+            print('ABR_device stopping abr session...')
+        
         # Tell the serial_reader to stop reading
-        print('setting stop event')
+        if self.verbose:
+            print('setting stop event')
         self.serial_reader.stop_event.set()
         
         # Wait for it to complete
         # Might take a little while because it has to send the stop message, etc
         time.sleep(1)
         
-        # Tell the threaded_queue_reader to stop
-        print('stopping tqr')
-        self.tqr.keep_reading = False
-        
-        # Wait for it to complete
-        # This one should be fast
-        time.sleep(0.1)
+        # Tell the queue_popper to stop
+        # This joins, so it blocks until it finishes
+        if self.verbose:
+            print('stopping queue_popper')
+        self.queue_popper.stop()
         
         # Join on the serial_reader (this will hang until all data is read out)
-        print('joining')
+        if self.verbose:
+            print('joining')
         self.proc.join(timeout=1)
+        
+        # If it didn't finish (most likely because data is left in the queues
+        # for some reason) then kill it
         if self.proc.is_alive():
-            print('killing')
+            print('warning: could not join serial_reader process; killing')
             self.proc.terminate()
 
         # Tell the writer to stop
-        self.tfw.stop()
+        # This joins, so it blocks until it finishes
+        self.file_writer.stop()
         
-        print('done')    
+        print('ABR_Device shutdown complete')    
 

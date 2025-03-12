@@ -1143,7 +1143,6 @@ class MainWindow(PyQt5.QtWidgets.QMainWindow):
         self.abr_device = ABR_Device.ABR_Device(
             verbose=True, 
             serial_port='/dev/ttyACM0', 
-            serial_baudrate=115200, 
             serial_timeout=0.1,
             abr_data_path='/home/mouse/mnt/cuttlefish/surgery/abr_data',
             experimenter=self.experimenter,
@@ -1422,7 +1421,7 @@ class MainWindow(PyQt5.QtWidgets.QMainWindow):
         ## Start stuff
         # TODO: Handle the case where the abr_device doesn't actually start
         # because it's not ready
-        self.abr_device.start_session(replay_filename=replay_filename)
+        self.abr_device.start(replay_filename=replay_filename)
 
         # Start plot widgets
         # TODO: consider controlling their timers in this object
@@ -1438,7 +1437,7 @@ class MainWindow(PyQt5.QtWidgets.QMainWindow):
         occurred.
         """
         # Stop the ABR device (serial port, etc)
-        self.abr_device.stop_session()
+        self.abr_device.stop()
         
         # Stop updating the scope widgets
         self.oscilloscope_widget.stop()
@@ -1454,19 +1453,19 @@ class MainWindow(PyQt5.QtWidgets.QMainWindow):
         if self.abr_device.session_dir is not None:
             self.label_session_dir.setText(self.abr_device.session_dir)
         
-        if self.abr_device.deq_data is not None:
-            #~ self.label_data_collected_s.setText('{:.1f}'.format(
-                #~ self.abr_device.tsr.n_packets_read * 500 / 16000))
+        if self.abr_device.serial_reader is not None:
+            self.label_data_collected_s.setText('{:.1f}'.format(
+                self.abr_device.serial_reader.n_packets_read * 500 / 16000))
 
             self.label_packets_in_memory.setText(str(
                 len(self.abr_device.deq_data)))
             
-            #~ self.label_n_late_reads.setText(str(
-                #~ self.abr_device.tsr.late_reads))
+            self.label_n_late_reads.setText(str(
+                self.abr_device.serial_reader.late_reads))
             
-        
-        #~ self.label_data_written_s = str(
-            #~ len(self.abr_device.tfw.n_chunks_written) * 500 / 16000)
+        if self.abr_device.file_writer is not None:
+            self.label_data_written_s = str(
+                len(self.abr_device.file_writer.n_chunks_written) * 500 / 16000)
 
     def closeEvent(self, event):
         """Executes when the window is closed

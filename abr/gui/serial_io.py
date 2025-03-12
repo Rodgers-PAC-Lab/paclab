@@ -1,6 +1,72 @@
-class MultiprocSerialReader(object):
+"""Objects for reading from the serial port
+
+SerialReader - reads data from the ADS1299 in a separate process
+QueuePopper - pops data from SerialReader's queues into thread-safe deques
+"""
+import collections
+import threading
+import multiprocessing
+import time
+import os
+import signal
+import json
+import serial
+from . import serial_comm
+import numpy as np
+
+class SerialReader(object):
+    """Object that reads from the serial port in another process
+    
+    This object has to run in its own process because otherwise the GUI
+    (or GIL?) can delay data reading for so long that it is lost from the 
+    serial port. 
+    
+    SerialReader handles all communication on the serial port because 
+    serial.Serial objects cannot be pickled across processes.
+    
+    All output from this object goes through multiprocessing.Queues
+    
+    Attributes
+    ---
+    q_data : multiprocessing.Queue()
+        Data packets (blocks of data as a 2d numpy array) are pushed to 
+        this queue as they arrive
+    q_header : multiprocessing.Queue()
+        Metadata (dict) are pushed to this queue as they arrive
+        One header is pushed for every packet
+    stop_event : multiprocessing.Event()
+        When this event is set, acquisition stops
+    n_packets_read : int
+        Incremented every time a packet is read
+    late_reads : int
+        Incremented every time data is left in the serial buffer after reading
+    
+    Methods
+    ---
+    start : Called to start acquisition
+        Generally this is the target of a multiprocessing call in 
+        ABR_Device
+    _read_and_append : Get a packet and push onto the output queues
+    """
     def __init__(self, serial_port, serial_timeout, gains, sampling_rate, 
         session_dir, session_dt_str, verbose=True):
+        """Initialize a new SerialReader to read from the serial port
+        
+        serial_port : str, like '/dev/ttyACM0'
+        serial_timeout : numeric
+            Used to initialize self.ser, a serial.Serial
+            This is the number of seconds it will wait for data
+        gains : list-like of length 8
+            The gain of each channel, sent to ADS1299
+        sampling_rate : numeric
+            Sampling rate to send to ADS1299
+        session_dir : path
+            The file `config.json` will be written here
+        session_dt_str : str
+            Store as key 'session_start_time' in config.json
+        verbose : bool
+            If True, writes out more information than otherwise
+        """
         # Store params
         self.serial_port = serial_port
         self.serial_timeout = serial_timeout
@@ -11,8 +77,8 @@ class MultiprocSerialReader(object):
         self.session_dt_str = session_dt_str
         
         # Output goes here
-        self.output_data = multiprocessing.Queue()
-        self.output_headers = multiprocessing.Queue()
+        self.q_data = multiprocessing.Queue()
+        self.q_header = multiprocessing.Queue()
         
         # Diagnostics
         self.late_reads = 0
@@ -21,10 +87,25 @@ class MultiprocSerialReader(object):
         # This is the flag used for stopping
         self.stop_event = multiprocessing.Event()
     
-    def start_session(self):
-        """Target of the thread
+    def start(self):
+        """Acquire data from the ADS1299 until self.stop_event is set
         
-        This runs until stop_event is detected
+        This should be run as the target of a multiprocessing call.
+        
+        Workflow
+        ---
+        * Disables CTRL+C in this process
+        * Creates the serial port
+        * Flush the serial port
+        * Write STOP to ADS1299
+        * QUERY the ADS1299 
+        * Set parameters of ADS1299
+        * Writes config.json (containing query results, and a few other things)
+          to the session_dir
+        * Start data acquisition
+        * Continuously call self._read_and_append() until stop_event is set
+        * Write STOP to ADS1299
+        * Close the serial port
         """
         ## Have the child process ignore CTRL+C
         # Otherwise CTRL+C as a message to stop the main proc also stops this
@@ -42,21 +123,23 @@ class MultiprocSerialReader(object):
         
         
         ## Close out the previous session
-        print('flushing serial port')
+        if self.verbose:
+            print(f'{datetime.datetime.now()}: flushing serial port')
         
         # Flush
         self.ser.flushInput()
         self.ser.flush()
         
         # Stop data acquisition if it's already happening
-        print('writing stop')
+        if self.verbose:
+            print('writing stop')
         serial_comm.write_stop(
             self.ser, warn_if_not_running=False, warn_if_running=True)
         
         
         ## Query the serial port
         # Just a consistency check because the answer should always be the same
-        print('querying')
+        print(f'{datetime.datetime.now()}: querying')
         query_res = serial_comm.write_query(self.ser)
 
 
@@ -67,7 +150,8 @@ class MultiprocSerialReader(object):
         cmd_str = f'U,8,{self.sampling_rate},0,{str_gains};'
         
         # Log
-        print(f'setting parameters: {cmd_str}')
+        if self.verbose:
+            print(f'{datetime.datetime.now()}: setting parameters: {cmd_str}')
         
         # Log the configs that were used
         to_json = query_res['message']
@@ -91,27 +175,43 @@ class MultiprocSerialReader(object):
         serial_comm.write_setupU(self.ser, cmd_str)
 
 
-        ## Tell it to start
-        print('starting acquisition...')
+        ## Start acquisition and continue until stop event
+        if self.verbose:
+            print(f'{datetime.datetime.now()}: starting acquisition...')
         serial_comm.write_start(self.ser)
         
-        
-        ## Capture until we are told to stop
+        # Capture until we are told to stop
         while not self.stop_event.is_set():
-            try:
-                self.read_and_append()
-            except Exception as e:
-                print(f'ignoring {e}')
-                pass
+            self._read_and_append()
         
-        print('stop event detected')
         
         ## Stop event was set, so stop
-        self.stop_session()
-        
-        print('done with MultiprocSerialReader.start_session')
+        if self.verbose:
+            print(f'{datetime.datetime.now()}: stop event detected')
 
-    def read_and_append(self):
+        # Tell the device to stop producing data
+        serial_comm.write_stop(self.ser)
+    
+        # Close serial port
+        self.ser.close()
+
+        if self.verbose:
+            print(
+                f'{datetime.datetime.now()}: '
+                'done with SerialReader.start')
+
+    def _read_and_append(self):
+        """Read a data packet and apend to the output queues
+        
+        Workflow
+        * Read a data packet using serial_comm.read_and_classify_packet
+          Raise an exception if no packet is read
+        * Add 'late_read' and 'in_waiting' to the header, to log when data
+          is leftover in the serial port
+        * put_nowait the header and data into self.q_header and
+          self.q_data
+        * Increment self.n_packets_read
+        """
         # Read a data packet
         # Relatively long wait_time here, in hopes that if something is
         # screwed up we can find sync bytes and get back on track
@@ -128,61 +228,81 @@ class MultiprocSerialReader(object):
         else:
             data_packet['message']['late_read'] = False
             data_packet['message']['in_waiting'] = in_waiting
-            
-        # Store the time
-        if self.verbose:
-            print(f"read packet {data_packet['message']['packet_num']}")
+
+        # This is very verbose
+        #~ if self.verbose:
+            #~ print(f"read packet {data_packet['message']['packet_num']}")
     
         # put_nowait means put right away, else raise an exception
-        self.output_headers.put_nowait(data_packet['message'])
-        self.output_data.put_nowait(data_packet['payload'])
+        self.q_header.put_nowait(data_packet['message'])
+        self.q_data.put_nowait(data_packet['payload'])
         
         # Log
         self.n_packets_read += 1
 
-    def stop_session(self):
-        print('MultiProc stopping abr session...')
-
-        # These steps can only be taken if the serial port was created, which
-        # doesn't happen for errors that occur on startup
-        if self.ser is not None:
-            # Tell the device to stop producing data
-            serial_comm.write_stop(self.ser)
-        
-            # Close serial port
-            self.ser.close()
-        else:
-            print('error: cannot close serial port because it was never created')
-        
-        print("abr device closed")
+class QueuePopper(object):
+    """Continuously read from multiprocessing.Queues into deques
     
-
-class ThreadedQueueReader(object):
-    """Instantiates a thread to constantly read from multiproc qs into deques
+    This object's job is to pop data from SerialReader's multiprocessing.Queues
+    and put them into thread-safe deques. A separate deque is used for 
+    each downstream sink. 
     
-    One deque will be provided to the GUI
-    Another deque will be provided to the ThreadedFileWriter
-
+    It's okay for this to be in a thread because it's okay if it's a little
+    delayed from time to time, and its only outputs are thread-safe.
+    
+    Attributes
+    ---
+    self.q_data and self.q_header : multiprocessing Queue
+        Should be SerialReader.q_data and SerialReader.q_header
+        Data is popped from these queues
+    self.n_packets_read : int
+        How many packets have been popped
+    self.deq_data_l, self.deq_header_l : lists of collections.Deque
+        Data popped from the queues is pushed into each of these deques
+    self.deq_header : collections.Deque, and first entry in self.deq_header_l
+        This deque is designated for the GUI to use
+    self.deq_data : collections.Deque, and the first entry in self.deq_data_l
+        This deque is designated for the GUI to use
+    
+    Methods
+    ---
+    get_output_deq : Used to request a new pair of deq_header and deq_data
+        for a new sink.
+    start : Start popping data (in a thread called self._capture_thread)
+    stop : Stop popping data and join self._capture_thread
     """
     def __init__(self, q_data, q_headers, verbose=False):
-        """Instatiate a new ThreadedSerialReader
+        """Instatiate a new QueuePopper
         
-        ser : serial.Serial
-            Data will be read from this object and stored in self.deq
+        Arguments
+        ---
+        q_data : multiprocessing.Queue
+            Should be SerialReader.q_data
+        q_header : multiprocessing.Queue
+            Should be SerialReader.q_header
+        verbose : bool
+            If True, more output will be printed
         """
+        # Store provided arguments
         self.q_data = q_data
         self.q_headers = q_headers
-        self.keep_reading = True
-        self.n_packets_read = 0
-        self.thread = None
         self.verbose = verbose
         
-        # This is a list of output deques
+        # Used to tell it stop running
+        self.keep_reading = True
+        
+        # Used to keep track of how many packets read
+        self.n_packets_read = 0
+        
+        # Used to keep track of its thread
+        self._capture_thread = None
+        
+        # This is a list of output deques, one per sink
         self.deq_data_l = []
-        self.deq_headers_l = []
+        self.deq_header_l = []
 
-        # The first one is always initialized (this is the one the GUI uses
-        # Later ones are initialized on request
+        # Initialize the first deqs, which are used by the GUI
+        # Other deques can be requested later
         self.deq_header, self.deq_data = self.get_output_deqs()
     
     def get_output_deqs(self):
@@ -197,13 +317,13 @@ class ThreadedQueueReader(object):
         new_deq_data = collections.deque()
         
         # Append
-        self.deq_headers_l.append(new_deq_header)
+        self.deq_header_l.append(new_deq_header)
         self.deq_data_l.append(new_deq_data)
         
         # Return
         return new_deq_header, new_deq_data
     
-    def capture(self):
+    def _capture(self):
         """Target of the thread
         
         As long as self.keep_reading is True, infinitely keep reading
@@ -225,7 +345,7 @@ class ThreadedQueueReader(object):
             
             if header is not None:
                 # Append to left side
-                for deq_header in self.deq_headers_l:
+                for deq_header in self.deq_header_l:
                     deq_header.append(header)
             
             
@@ -249,14 +369,14 @@ class ThreadedQueueReader(object):
    
     def start(self):
         """Start the capture of data"""
-        self.thread = threading.Thread(target=self.capture)
-        self.thread.start()
+        self._capture_thread = threading.Thread(target=self._capture)
+        self._capture_thread.start()
     
     def stop(self):
         """Stop capturing data and join the thread"""
         self.keep_reading = False
         
-        if self.thread is not None:
-            self.thread.join()
+        if self._capture_thread is not None:
+            self._capture_thread.join()
 
 

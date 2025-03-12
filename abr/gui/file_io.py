@@ -1,17 +1,86 @@
-class ThreadedFileWriter(object):
+"""Classes for reading and writing from files
+
+FileWriter : Write data to a file in a thread
+FileReader : Read data from a file, simulating the ADS1299
+"""
+import collections
+import threading
+import time
+import datetime
+import os
+import numpy as np
+import paclab.abr
+
+"""
+Chunk of code for keeping data in a cyclical buffer
+
+# Keep track of big_data here
+self.big_data_last_col = 0
+self.big_data = None
+self.headers_l = []
+
+## Append to big data
+if self.big_data is None:
+    # Special case, it doesn't exist yet
+    # This is also how we find out how many columns it has
+    self.big_data = data_chunk.copy()
+    self.big_data_last_col = len(data_chunk)
+
+else:
+    # The normal case, self.big_data does exist
+    # This is how long it will be
+    self.new_big_data_last_col = (
+        self.big_data_last_col + len(data_chunk))
+
+    # Grow if needed
+    if self.new_big_data_last_col > len(self.big_data):
+        # Make it twice as big as needed
+        new_len = 2 * self.new_big_data_last_col
+        
+        # Fill it with zeros
+        self.new_big_data = np.zeros(
+            (new_len, self.big_data.shape[1]))
+        
+        # Copy in the old data
+        self.new_big_data[:self.big_data_last_col] = (
+            self.big_data[:self.big_data_last_col])
+        
+        # Rename
+        self.big_data = self.new_big_data
+    
+    # Add the new data at the end
+    self.big_data[
+        self.big_data_last_col:self.new_big_data_last_col] = (
+        data_chunk)
+
+    # Update the pointer
+    self.big_data_last_col = self.new_big_data_last_col
+
+# Store read headers
+self.headers_l.append(data_header)
+"""
+
+class FileWriter(object):
+    """Writes data from deques to disk
+    
+    Methods
+    ---
+    start : start writing data in a thread
+    stop : stop writing data and join the thread
+    """
     def __init__(self, 
-        deq_data, deq_headers, output_filename, output_header_filename,
-        minimum_deq_length=10, verbose=False):
+        deq_data, deq_header, output_filename, output_header_filename,
+        verbose=False):
         """Initialize a new ThreadedFileWriter
 
         Pops data from the left side of deq_data and writes to disk.
 
         deq_data : deque 
-            Data filled by and shared with ThreadedSerialReader
+            Data filled by and shared with QueuePopper
             These are the chunks of data, with time along the rows
         
-        deq_headers : deque 
-            Data filled by and shared with ThreadedSerialReader
+        deq_header : deque 
+            Data filled by and shared with QueuePopper
             These are the headers for each chunk of data, one row per chunk
 
         output_filename : str or None
@@ -22,20 +91,24 @@ class ThreadedFileWriter(object):
             Where to write out headers
             if None, nothing is written to disk
 
-        minimum_deq_length : int
-            If len(deq) < minimum_deq_length, no data will be popped or written
-            This is probably no longer necessary, since we don't analyze data
-            in tfw
+        verbose : bool
+            If True, write out more stuff
         """
-        # Store
+        # Store arguments
         self.output_filename = output_filename
         self.output_header_filename = output_header_filename
         self.minimum_deq_length = minimum_deq_length
         self.deq_data = deq_data
-        self.deq_headers = deq_headers
-        self.keep_writing = True
-        self.thread = None
+        self.deq_header = deq_header
         self.verbose = verbose
+        
+        # Whether to keep going
+        self.keep_writing = True
+        
+        # Keep track of my thread
+        self.thread = None
+        
+        # Keep track of how many chunks written
         self.n_chunks_written = 0
         
         # Set to null by default
@@ -44,11 +117,6 @@ class ThreadedFileWriter(object):
         
         if self.output_header_filename is None:
             self.output_header_filename = os.devnull
-        
-        #~ # Keep track of big_data here
-        #~ self.big_data_last_col = 0
-        #~ self.big_data = None
-        #~ self.headers_l = []
         
         # This will be set by the first header that's received
         self.header_colnames = None
@@ -61,25 +129,24 @@ class ThreadedFileWriter(object):
         with open(self.output_header_filename, 'w') as headers_out:
             pass
 
-    def write_to_disk(self, drain=False):
-        # Don't write if the deq is too short, unless drain is True
-        if drain:
-            threshold = 0
-        else:
-            threshold = self.minimum_deq_length
+    def write_to_disk(self):
+        """Write data to disk"""
+        # Return immediately if nothing to do
+        if len(self.deq_data) == 0:
+            return
         
-        # Empty 
+        # Otherwise write data until we run out
         with (
                 open(self.output_filename, 'ab') as data_out, 
                 open(self.output_header_filename, 'a') as headers_out
                 ):
-            while len(self.deq_data) > threshold:
+            while len(self.deq_data) > 0:
                 ## Pop
                 # Pop the oldest data
                 data_chunk = self.deq_data.popleft()
                 
                 # Pop the oldest header
-                data_header = self.deq_headers.popleft()
+                data_header = self.deq_header.popleft()
             
             
                 ## Set up the header row of headers_out if first time
@@ -91,55 +158,15 @@ class ThreadedFileWriter(object):
                     headers_out.write(str_to_write + '\n')            
                 
                 
-                ## Append raw data to output file
+                ## Append data to output file
                 # Note: just maintains dtype of whatever data_chunk is
                 data_out.write(data_chunk)
                 
-                # Append header
+                # Append header to headers_out
                 str_to_write = ','.join(
-                    [str(data_header[colname]) for colname in self.header_colnames])
+                    [str(data_header[colname]) 
+                    for colname in self.header_colnames])
                 headers_out.write(str_to_write + '\n')
-                
-
-                #~ ## Append to big data
-                #~ if self.big_data is None:
-                    #~ # Special case, it doesn't exist yet
-                    #~ # This is also how we find out how many columns it has
-                    #~ self.big_data = data_chunk.copy()
-                    #~ self.big_data_last_col = len(data_chunk)
-                
-                #~ else:
-                    #~ # The normal case, self.big_data does exist
-                    #~ # This is how long it will be
-                    #~ self.new_big_data_last_col = (
-                        #~ self.big_data_last_col + len(data_chunk))
-
-                    #~ # Grow if needed
-                    #~ if self.new_big_data_last_col > len(self.big_data):
-                        #~ # Make it twice as big as needed
-                        #~ new_len = 2 * self.new_big_data_last_col
-                        
-                        #~ # Fill it with zeros
-                        #~ self.new_big_data = np.zeros(
-                            #~ (new_len, self.big_data.shape[1]))
-                        
-                        #~ # Copy in the old data
-                        #~ self.new_big_data[:self.big_data_last_col] = (
-                            #~ self.big_data[:self.big_data_last_col])
-                        
-                        #~ # Rename
-                        #~ self.big_data = self.new_big_data
-                    
-                    #~ # Add the new data at the end
-                    #~ self.big_data[
-                        #~ self.big_data_last_col:self.new_big_data_last_col] = (
-                        #~ data_chunk)
-
-                    #~ # Update the pointer
-                    #~ self.big_data_last_col = self.new_big_data_last_col
-
-                #~ # Store read headers
-                #~ self.headers_l.append(data_header)
 
                 
                 ## Keep track of how many chunks written
@@ -148,14 +175,14 @@ class ThreadedFileWriter(object):
         if self.verbose:
             print(f"popped and wrote {self.n_chunks_written} chunks")
 
-    def write_out(self):
+    def _target(self):
         """Target of the thread
         
-        As long as self.keep_reading is True, infinitely keep reading
+        As long as self.keep_writing is True, infinitely keep reading
         chunks of data and appending to the deq as they come in.
         Keep track of any late reads.
         
-        Once self.keep_reading is False, read any last chunks, 
+        Once self.keep_writing is False, read any last chunks, 
         and then return.
         """
         # Continue as long as self.keep_writing
@@ -167,13 +194,13 @@ class ThreadedFileWriter(object):
             # But it increases the latency before draining
             time.sleep(.3)
         
-        # self.keep_reading has been set False
+        # self.keep_writing has been set False
         # Read any last chunks
-        self.write_to_disk(drain=True)
+        self.write_to_disk()
     
     def start(self):
         """Start the capture of data"""
-        self.thread = threading.Thread(target=self.write_out)
+        self.thread = threading.Thread(target=self._target)
         self.thread.start()
     
     def stop(self):
@@ -201,7 +228,7 @@ class ThreadedFileReader(object):
         filename : full path to a *.bin written by BG code
         
         """
-        self.deq_headers = collections.deque()
+        self.deq_header = collections.deque()
         self.deq_data = collections.deque()
         self.filename = filename
         self.keep_reading = True
@@ -269,7 +296,7 @@ class ThreadedFileReader(object):
         # Append to the left side of the deque
         header = self.first_header_info.copy()
         header['packet_num'] = self.n_packets_read
-        self.deq_headers.append(header)
+        self.deq_header.append(header)
         self.deq_data.append(payload)
         
         # Log
