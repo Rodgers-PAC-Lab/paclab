@@ -97,7 +97,6 @@ class FileWriter(object):
         # Store arguments
         self.output_filename = output_filename
         self.output_header_filename = output_header_filename
-        self.minimum_deq_length = minimum_deq_length
         self.deq_data = deq_data
         self.deq_header = deq_header
         self.verbose = verbose

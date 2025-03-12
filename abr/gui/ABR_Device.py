@@ -205,7 +205,7 @@ class ABR_Device(object):
             
             
             ## Create the serial_reader object
-            self.serial_reader = SerialReader(
+            self.serial_reader = serial_io.SerialReader(
                 serial_port=self.serial_port,
                 serial_timeout=self.serial_timeout,
                 gains=self.gains,
@@ -227,8 +227,8 @@ class ABR_Device(object):
             # Continuously read data out of the mp queues and into 
             # thread-safe deques
             self.queue_popper = serial_io.QueuePopper(
-                q_data=self.serial_reader.output_data,
-                q_headers=self.serial_reader.output_headers,
+                q_data=self.serial_reader.q_data,
+                q_headers=self.serial_reader.q_header,
                 )
             
             # Get the default output deqs, which are for gui
@@ -247,12 +247,12 @@ class ABR_Device(object):
             output_filename = os.path.join(
                 self.session_dir, 'data.bin')
             output_header_filename = os.path.join(
-                self.session_dir, 'packet_headers.csv'),
+                self.session_dir, 'packet_headers.csv')
             
             # Create file_writer
             self.file_writer = file_io.FileWriter(
                 deq_data=fw_deq_data,
-                deq_headers=fw_deq_header,
+                deq_header=fw_deq_header,
                 output_filename=output_filename,
                 output_header_filename=output_header_filename,
                 )

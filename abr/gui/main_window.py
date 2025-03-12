@@ -358,7 +358,7 @@ class MainWindow(PyQt5.QtWidgets.QMainWindow):
             
         if self.abr_device.file_writer is not None:
             self.label_data_written_s = str(
-                len(self.abr_device.file_writer.n_chunks_written) * 500 / 16000)
+                self.abr_device.file_writer.n_chunks_written * 500 / 16000)
 
     def closeEvent(self, event):
         """Executes when the window is closed

@@ -5,6 +5,7 @@ QueuePopper - pops data from SerialReader's queues into thread-safe deques
 """
 import collections
 import threading
+import datetime
 import multiprocessing
 import time
 import os
