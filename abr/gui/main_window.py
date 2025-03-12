@@ -34,7 +34,7 @@ class MainWindow(PyQt5.QtWidgets.QMainWindow):
         
         ## Create objects here that would actually do the work, tfw etc
         self.abr_device = ABR_Device.ABR_Device(
-            verbose=True, 
+            verbose=False, 
             serial_port='/dev/ttyACM0', 
             serial_timeout=0.1,
             abr_data_path='/home/mouse/mnt/cuttlefish/surgery/abr_data',
