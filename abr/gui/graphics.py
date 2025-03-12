@@ -6,6 +6,7 @@ TODO:
 * Allow flipping live switch
 * invert color order in ABR plot
 * make a mean ABR
+* Handle close ABR window more nicely
 
 Timing parameters:
 * OscilloscopeWidget.update_interval_ms
@@ -21,8 +22,8 @@ Timing parameters:
 Labels:
 * The text label "data analyzed (s)" indicates how much is being used by
 the GUI, which will be at most duration_data_to_analyze_s.
-* The text label "packets in memory" is the same quantity, but expressed
-in packets instead of seconds.
+* The text label "packets in memory" is the length of the deque available to 
+the GUI. 
 * The text label "data collected" indicates how much data has been read
 over the entire experiment, even that which is no longer in memory.
 * time taken and debug timing interval??
@@ -51,10 +52,10 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         update_interval_ms=500,
         duration_data_to_analyze_s=60, 
         neural_scope_xrange_s=5,
-        neural_scope_yrange_uV=200000, # max achievable is 187500 at gain=24
+        neural_scope_yrange_mV=200, # max achievable is 187.500 at gain=24
         highpass_neural_scope_yrange_uV=30, # should have stdev ~1 uV
         audio_scope_xrange_s=5,
-        audio_scope_yrange_uV=300000,
+        audio_scope_yrange_mV=300,
         abr_audio_monitor_yrange_uV=5, # abslog scale
         abr_neural_yrange_uV=5,
         audio_extract_win_samples=10,
@@ -89,10 +90,10 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
 
         # Parameters that can be set by user interaction
         self.neural_scope_xrange_s = neural_scope_xrange_s
-        self.neural_scope_yrange_uV = neural_scope_yrange_uV
+        self.neural_scope_yrange_mV = neural_scope_yrange_mV
         self.highpass_neural_scope_yrange_uV = highpass_neural_scope_yrange_uV
         self.audio_scope_xrange_s = audio_scope_xrange_s
-        self.audio_scope_yrange_uV = audio_scope_yrange_uV
+        self.audio_scope_yrange_mV = audio_scope_yrange_mV
         self.abr_audio_monitor_yrange_uV = abr_audio_monitor_yrange_uV
         self.abr_neural_yrange_uV = abr_neural_yrange_uV
 
@@ -100,7 +101,7 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         self.heart_rate = -1
         
         # Debug
-        self.print_timing_information = True
+        self.print_timing_information = False
         
         
         ## ABR extraction parameters
@@ -206,14 +207,14 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
             PyQt5.QtWidgets.QLabel('neural scope xrange (s)'), 1, 0)
         row_neural_boxes.addWidget(self.line_edit_neural_scope_xrange_s, 1, 1)
         
-        # Param: neural_scope_yrange_uV
-        self.line_edit_neural_scope_yrange_uV = PyQt5.QtWidgets.QLineEdit(    
-            str(self.neural_scope_yrange_uV))
-        self.line_edit_neural_scope_yrange_uV.returnPressed.connect(
-            self.line_edit_neural_scope_yrange_uV_update)
+        # Param: neural_scope_yrange_mV
+        self.line_edit_neural_scope_yrange_mV = PyQt5.QtWidgets.QLineEdit(    
+            str(self.neural_scope_yrange_mV))
+        self.line_edit_neural_scope_yrange_mV.returnPressed.connect(
+            self.line_edit_neural_scope_yrange_mV_update)
         row_neural_boxes.addWidget(
-            PyQt5.QtWidgets.QLabel('neural scope yrange (uV)'), 0, 0)
-        row_neural_boxes.addWidget(self.line_edit_neural_scope_yrange_uV, 0, 1)
+            PyQt5.QtWidgets.QLabel('neural scope yrange (mV)'), 0, 0)
+        row_neural_boxes.addWidget(self.line_edit_neural_scope_yrange_mV, 0, 1)
 
         # Param: checkbox for plot_ch0
         self.checkbox_plot_ch0_neural = PyQt5.QtWidgets.QCheckBox()
@@ -258,7 +259,7 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         row_highpass_neural_plot.addWidget(self.highpass_neural_plot_widget)
         row_highpass_neural_plot.addLayout(row_highpass_neural_boxes)
         
-        # Param: highpass_neural_scope_yrange_uV
+        # Param: highpass_neural_scope_yrange_mV
         self.line_edit_highpass_neural_scope_yrange_uV = PyQt5.QtWidgets.QLineEdit(    
             str(self.highpass_neural_scope_yrange_uV))
         self.line_edit_highpass_neural_scope_yrange_uV.returnPressed.connect(
@@ -319,14 +320,14 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
             PyQt5.QtWidgets.QLabel('audio scope xrange (s)'), 1, 0)
         row_audio_boxes.addWidget(self.line_edit_audio_scope_xrange_s, 1, 1)
         
-        # Param: audio_scope_yrange_uV
-        self.line_edit_audio_scope_yrange_uV = PyQt5.QtWidgets.QLineEdit(    
-            str(self.audio_scope_yrange_uV))
-        self.line_edit_audio_scope_yrange_uV.returnPressed.connect(
-            self.line_edit_audio_scope_yrange_uV_update)
+        # Param: audio_scope_yrange_mV
+        self.line_edit_audio_scope_yrange_mV = PyQt5.QtWidgets.QLineEdit(    
+            str(self.audio_scope_yrange_mV))
+        self.line_edit_audio_scope_yrange_mV.returnPressed.connect(
+            self.line_edit_audio_scope_yrange_mV_update)
         row_audio_boxes.addWidget(
-            PyQt5.QtWidgets.QLabel('audio scope yrange (uV)'), 0, 0)
-        row_audio_boxes.addWidget(self.line_edit_audio_scope_yrange_uV, 0, 1)        
+            PyQt5.QtWidgets.QLabel('audio scope yrange (mV)'), 0, 0)
+        row_audio_boxes.addWidget(self.line_edit_audio_scope_yrange_mV, 0, 1)        
 
         
         ## Third row: ABR readouts
@@ -460,15 +461,15 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         
         self.neural_scope_xrange_s = value
 
-    def line_edit_neural_scope_yrange_uV_update(self):
+    def line_edit_neural_scope_yrange_mV_update(self):
         try:
-            text = self.line_edit_neural_scope_yrange_uV.text()
+            text = self.line_edit_neural_scope_yrange_mV.text()
             value = float(text)
         except ValueError:
             print(f'warning: cannont convert {text} to float, ignoring')
             return
         
-        self.neural_scope_yrange_uV = value
+        self.neural_scope_yrange_mV = value
 
     def line_edit_highpass_neural_scope_yrange_uV_update(self):
         try:
@@ -490,15 +491,15 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         
         self.audio_scope_xrange_s = value
 
-    def line_edit_audio_scope_yrange_uV_update(self):
+    def line_edit_audio_scope_yrange_mV_update(self):
         try:
-            text = self.line_edit_audio_scope_yrange_uV.text()
+            text = self.line_edit_audio_scope_yrange_mV.text()
             value = float(text)
         except ValueError:
             print(f'warning: cannont convert {text} to float, ignoring')
             return
         
-        self.audio_scope_yrange_uV = value
+        self.audio_scope_yrange_mV = value
     
     def line_edit_abr_audio_monitor_yrange_uV_update(self):
         try:
@@ -547,9 +548,9 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         self.abr_neural_ch4_monitor_widget.setTitle('ch4 ABR')
         
         # Set the ylabel
-        self.neural_plot_widget.setLabel('left', 'neural signal (uV)')
+        self.neural_plot_widget.setLabel('left', 'neural signal (mV)')
         self.highpass_neural_plot_widget.setLabel('left', 'highpass signal (uV)')
-        self.speaker_plot_widget.setLabel('left', 'speaker signal (uV)')
+        self.speaker_plot_widget.setLabel('left', 'speaker signal (mV)')
         
         # Set the xlabel
         self.neural_plot_widget.setLabel('bottom', 'time (sec)')
@@ -565,12 +566,12 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         
         # Set the range for the Y axis
         self.neural_plot_widget.setYRange(
-            -self.neural_scope_yrange_uV, self.neural_scope_yrange_uV)
+            -self.neural_scope_yrange_mV, self.neural_scope_yrange_mV)
         self.highpass_neural_plot_widget.setYRange(
             -self.highpass_neural_scope_yrange_uV, 
             self.highpass_neural_scope_yrange_uV)
         self.speaker_plot_widget.setYRange(
-            -self.audio_scope_yrange_uV, self.audio_scope_yrange_uV)
+            -self.audio_scope_yrange_mV, self.audio_scope_yrange_mV)
         self.abr_pos_audio_monitor_widget.setXRange(
             -self.audio_extract_win_samples, self.audio_extract_win_samples)
         self.abr_pos_audio_monitor_widget.setYRange(
@@ -598,6 +599,10 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
             self.plot_handle_rewarded_correct_pokes : a raster plot of 
                 rewarded correct pokes in green
         """
+        # Plot max lines at min and max in the neural_plot
+        self.neural_plot_widget.addLine(x=None, y=187.5, pen={'color': 'w'})
+        self.neural_plot_widget.addLine(x=None, y=-187.5, pen={'color': 'w'})
+        
         # Set up each handle for the neural plot
         self.neural_plot_handle_l = []
         for n_channel, channel in enumerate(self.neural_channels_to_plot):
@@ -925,7 +930,7 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         # Set each neural plot
         for n_channel, neural_channel in enumerate(neural_data.T):
             self.neural_plot_handle_l[n_channel].setData(
-                x=xvals[include_mask], y=neural_channel[include_mask])
+                x=xvals[include_mask], y=neural_channel[include_mask] / 1e3)
         
         # Set each highpass neural plot
         for n_channel, neural_channel in enumerate(neural_data_hp.T):
@@ -940,7 +945,7 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
             )
         
         # Set speaker plot
-        self.speaker_plot_handle.setData(x=xvals, y=speaker_channel)
+        self.speaker_plot_handle.setData(x=xvals, y=speaker_channel / 1e3)
     
         times.append(('neural plots updated', datetime.datetime.now()))
 
@@ -982,6 +987,7 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
             ['amplitude', 'polarity', 't_samples']).sort_index()
         
         times.append(('audio triggered', datetime.datetime.now()))
+
 
         ## Extract neural data locked to onsets
         # Extract highpassed neural data around triggers
