@@ -5,7 +5,9 @@ MainWindow : object that instantiates the GUI
 
 import sys
 import traceback
+import datetime
 import os
+import numpy as np
 import PyQt5.QtWidgets
 import PyQt5.QtCore
 from . import ABR_Device
@@ -132,7 +134,7 @@ class MainWindow(PyQt5.QtWidgets.QMainWindow):
         row_session_boxes.addWidget(self.label_packets_in_memory, 3, 1)
 
         # Param: n_late_reads
-        self.label_n_late_reads = PyQt5.QtWidgets.QLabel('')
+        self.label_n_late_reads = PyQt5.QtWidgets.QLabel('N/A')
         row_session_boxes.addWidget(
             PyQt5.QtWidgets.QLabel('# late reads'), 4, 0)
         row_session_boxes.addWidget(self.label_n_late_reads, 4, 1)
@@ -351,15 +353,24 @@ class MainWindow(PyQt5.QtWidgets.QMainWindow):
         if self.abr_device.session_dir is not None:
             self.label_session_dir.setText(self.abr_device.session_dir)
         
-        if self.abr_device.serial_reader is not None:
-            self.label_data_collected_s.setText('{:.1f}'.format(
-                self.abr_device.serial_reader.n_packets_read * 500 / 16000))
+        if self.abr_device.queue_popper is not None:
+            # Seconds of data captured
+            captured_data_s = (
+                self.abr_device.queue_popper.n_packets_read * 500 / 16000)
+            captured_data_min = int(np.floor(captured_data_s / 60))
+            captured_data_sec = captured_data_s - 60 * captured_data_min
+            
+            # Convert to MM:SS format (dropping most of the microsceonds)
+            self.label_data_collected_s.setText(
+                f'{captured_data_min:02}:{captured_data_sec:04.1f}')
 
             self.label_packets_in_memory.setText(str(
                 len(self.abr_device.deq_data)))
             
-            self.label_n_late_reads.setText(str(
-                self.abr_device.serial_reader.late_reads))
+            # This doesn't work because this variable isn't shared over 
+            # the other process
+            #~ self.label_n_late_reads.setText(str(
+                #~ self.abr_device.serial_reader.late_reads))
             
         if self.abr_device.file_writer is not None:
             self.label_data_written_s = str(

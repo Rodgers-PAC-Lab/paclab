@@ -339,6 +339,8 @@ class QueuePopper(object):
         # down, otherwise we won't get the last bit of data
         while self.keep_reading:
             
+            # TODO: what if we get a header but not a packet, or vice versa?
+            
             ## Try to get a header
             try:
                 header = self.q_headers.get_nowait()
@@ -361,6 +363,9 @@ class QueuePopper(object):
                 # Append to left side
                 for deq_data in self.deq_data_l:
                     deq_data.append(data)
+                    
+                    # Count
+                    self.n_packets_read += 1
             
             
             ## If we didn't get any data, sleep for a bit
