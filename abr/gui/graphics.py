@@ -249,7 +249,12 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         row_neural_boxes.addWidget(
             PyQt5.QtWidgets.QLabel('data analyzed (s)'), 5, 0)
         row_neural_boxes.addWidget(self.label_analyze_data_duration_s, 5, 1)
-        
+
+        # Label: rms on each channel
+        self.label_raw_neural_rms = PyQt5.QtWidgets.QLabel('')
+        row_neural_boxes.addWidget(
+            PyQt5.QtWidgets.QLabel('raw rms: '), 6, 0)
+        row_neural_boxes.addWidget(self.label_raw_neural_rms, 6, 1)
 
 
         ## Second row: a row of highpass neural widgets
@@ -302,6 +307,12 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         row_highpass_neural_boxes.addWidget(
             PyQt5.QtWidgets.QLabel('heart rate'), 4, 0)
         row_highpass_neural_boxes.addWidget(self.label_heart_rate, 4, 1)
+
+        # Label: rms on each channel
+        self.label_highpass_neural_rms = PyQt5.QtWidgets.QLabel('')
+        row_highpass_neural_boxes.addWidget(
+            PyQt5.QtWidgets.QLabel('highpass rms: '), 5, 0)
+        row_highpass_neural_boxes.addWidget(self.label_highpass_neural_rms, 5, 1)
 
 
         ## Second row: a row of audio widgets
@@ -880,7 +891,7 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         neural_data_hp = scipy.signal.filtfilt(ahi, bhi, neural_data, axis=0)
 
         times.append(('first hp', datetime.datetime.now()))
-        
+
         
         ## Bandpass heartbeat
         # TODO: hardcoded to ch0, make this selectable
@@ -918,6 +929,22 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         self.label_heart_rate.setText(str(int(np.rint(self.heart_rate_bpm))))
         
         times.append(('heartbeat processed', datetime.datetime.now()))
+        
+        
+        ## Set labels for RMS power in each band
+        # Set the label for the raw rms power
+        raw_rms = neural_data.std(axis=0) * 1e3
+        raw_rms_s = ' '.join([
+            'ch{}={:.1f} mV;'.format(chan, val) for chan, val in 
+            zip(self.neural_channels_to_plot, raw_rms)])
+        self.label_raw_neural_rms.setText(raw_rms_s)
+
+        # Set the label for the hp rms power
+        hp_rms = neural_data_hp.std(axis=0) * 1e6
+        hp_rms_s = ' '.join([
+            'ch{}={:.1f} uV;'.format(chan, val) for chan, val in 
+            zip(self.neural_channels_to_plot, hp_rms)])
+        self.label_highpass_neural_rms.setText(hp_rms_s)
         
         
         ## Update plot with the new xvals and yvals
