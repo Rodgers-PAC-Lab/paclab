@@ -7,6 +7,63 @@ import scipy
 import matplotlib.pyplot as plt
 import my
 import my.plot
+import xml.etree.ElementTree
+
+def load_metadata_from_xml(neural_root, logger, session_name):
+    """Load metadata like sampling rate from XML file for a logger recording
+    
+    Arguments
+    ---
+    neural_root : path to neural data
+    logger : str
+        Name of logger, eg logger_628DAB or 628DAB
+    session_name : str
+        Name of recording, eg 
+        'HSW_2025_03_31__17_52_42__09min_58sec__hsamp_128ch_14285sps.bin'
+        This is used only to extract the date string by indexing [4:24]
+    
+    Flow
+    ---
+    * Form the expected XML file name
+    * Load it
+    * Extract channel count and sampling rate
+
+    Returns: channel_count, sampling_rate
+        channel_count : int, number of channels
+        sampling_rate : float
+    """
+    ## Find the corresponding xml file
+    # Get date string from session name
+    date_string = session_name[4:24]
+    
+    # Normalize logger
+    logger = logger.replace('logger_', '')
+    
+    # Join 
+    xml_file = os.path.join(
+        neural_root, f'record_ID{logger}_{date_string}.xml')
+    
+    # Check that it exists
+    assert os.path.exists(xml_file)
+
+    
+    ## Parse xml
+    tree = xml.etree.ElementTree.parse(xml_file)
+
+    # Get channel count
+    rec_mode_name_nodes = tree.findall('RECORD/REC_MODE_NAME')
+    assert len(rec_mode_name_nodes) == 1
+    channel_count = int(
+        rec_mode_name_nodes[0].text.replace('"', '').replace('ch', ''))
+
+    # Get sampling rate
+    sampling_rate_nodes = tree.findall('SETTINGS/SAMPLING_RATE_SPS')
+    assert len(sampling_rate_nodes) == 1
+    neural_fs = float(sampling_rate_nodes[0].text)
+
+    
+    ## Return
+    return channel_count, neural_fs
 
 def form_analog_filename(analog_root, analog_session, experiment_number=1, 
     recording_number=1):
