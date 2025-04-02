@@ -342,7 +342,7 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         # Label: rms on each channel
         self.label_raw_neural_rms = PyQt5.QtWidgets.QLabel('')
         row_neural_boxes.addWidget(
-            PyQt5.QtWidgets.QLabel('raw rms: '), 6, 0)
+            PyQt5.QtWidgets.QLabel('raw rms (mV): '), 6, 0)
         row_neural_boxes.addWidget(self.label_raw_neural_rms, 6, 1)
 
 
@@ -408,7 +408,7 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         # Label: rms on each channel
         self.label_highpass_neural_rms = PyQt5.QtWidgets.QLabel('')
         row_highpass_neural_boxes.addWidget(
-            PyQt5.QtWidgets.QLabel('highpass rms: '), 5, 0)
+            PyQt5.QtWidgets.QLabel('ABR band rms (uV): '), 5, 0)
         row_highpass_neural_boxes.addWidget(self.label_highpass_neural_rms, 5, 1)
 
 
@@ -1056,16 +1056,16 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         
         ## Set labels for RMS power in each band
         # Set the label for the raw rms power
-        raw_rms = neural_data.std(axis=0) * 1e3
+        raw_rms = neural_data.std(axis=0) / 1e3
         raw_rms_s = ' '.join([
-            'ch{}={:.1f} mV;'.format(chan, val) for chan, val in 
+            'ch{}={:.1f};'.format(chan, val) for chan, val in 
             zip(self.neural_channels_to_plot, raw_rms)])
         self.label_raw_neural_rms.setText(raw_rms_s)
 
         # Set the label for the hp rms power
-        hp_rms = neural_data_hp.std(axis=0) * 1e6
+        hp_rms = neural_data_hp.std(axis=0)
         hp_rms_s = ' '.join([
-            'ch{}={:.1f} uV;'.format(chan, val) for chan, val in 
+            'ch{}={:.1f};'.format(chan, val) for chan, val in 
             zip(self.neural_channels_to_plot, hp_rms)])
         self.label_highpass_neural_rms.setText(hp_rms_s)
         
