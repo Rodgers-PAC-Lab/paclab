@@ -33,6 +33,7 @@ import scipy.signal
 import paclab.abr
 import numpy as np
 import pandas
+import matplotlib.mlab
 import PyQt5.QtWidgets
 import PyQt5.QtCore
 import pyqtgraph as pg
@@ -44,6 +45,72 @@ import pyqtgraph as pg
 # paclab.abr.abr_gui
 import paclab.abr.abr
 
+# TODO: move this to a shared location
+def psd(data, NFFT=None, Fs=None, detrend='mean', window=None, noverlap=None, 
+    scale_by_freq=None, **kwargs):
+    """Compute power spectral density.
+    
+    A wrapper around mlab.psd with more documentation and slightly different
+    defaults.
+    
+    Arguments
+    ---
+    data : The signal to analyze. Must be 1d
+    NFFT : defaults to 256 in mlab.psd
+    Fs : defaults to 2 in mlab.psd
+    detrend : default is 'mean', overriding default in mlab.psd
+    window : defaults to Hanning in mlab.psd
+    noverlap : defaults to 0 in mlab.psd
+        50% or 75% of NFFT is a good choice in data-limited situations
+    scale_by_freq : defaults to True in mlab.psd
+    **kwargs : passed to mlab.psd
+    
+    Notes on scale_by_freq
+    ---
+    Using scale_by_freq = False makes the sum of the PSD independent of NFFT
+    Using scale_by_freq = True makes the values of the PSD comparable for
+    different NFFT
+    In both cases, the result is independent of the length of the data
+    With scale_by_freq = False, ppxx.sum() is roughly comparable to 
+      the mean of the data squared (but about half as much, for some reason)
+    With scale_by_freq = True, the returned results are smaller by a factor
+      roughly equal to sample_rate, but not exactly, because the window 
+      correction is done differently
+    
+    With scale_by_freq = True
+      The sum of the PSD is proportional to NFFT/sample_rate
+      Multiplying the PSD by sample_rate/NFFT and then summing it
+        gives something that is roughly equal to np.mean(signal ** 2)
+      To sum up over a frequency range, could ignore NFFT and multiply
+        by something like bandwidth/sample_rate, but I am not sure.
+    With scale_by_freq = False
+      The sum of the PSD is independent of NFFT and sample_rate
+      The sum of the PSD is slightly more than np.mean(signal ** 2)
+      To sum up over a frequency range, need to account for the number of
+        points in that range, which depends on NFFT.
+    In both cases
+      The sum of the PSD is independent of the length of the signal
+    The reason that the answers are not proportional to each other
+    is because the window correction is done differently. 
+    
+    scale_by_freq = True generally seems to be more accurate
+    I imagine scale_by_freq = False might be better for quickly reading
+    off a value of a peak    
+    """
+    # Run PSD
+    Pxx, freqs = matplotlib.mlab.psd(
+        data,
+        NFFT=NFFT,
+        Fs=Fs,
+        detrend=detrend,
+        window=window,
+        noverlap=noverlap,
+        scale_by_freq=scale_by_freq,
+        **kwargs,
+        )
+
+    # Return
+    return Pxx, freqs
 
 class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
     def __init__(self, 
@@ -171,6 +238,7 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         self.neural_plot_widget = pg.PlotWidget() 
         self.highpass_neural_plot_widget = pg.PlotWidget() 
         self.speaker_plot_widget = pg.PlotWidget()
+        self.psd_monitor_widget = pg.PlotWidget()
         self.abr_pos_audio_monitor_widget = pg.PlotWidget()
         self.abr_neg_audio_monitor_widget = pg.PlotWidget()
         self.abr_neural_ch0_monitor_widget = pg.PlotWidget()
@@ -178,9 +246,26 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         self.abr_neural_ch4_monitor_widget = pg.PlotWidget()
         
         # Size them
-        self.neural_plot_widget.setFixedHeight(150)
-        self.highpass_neural_plot_widget.setFixedHeight(150)
-        self.speaker_plot_widget.setFixedHeight(150)
+        for widget in [
+            self.neural_plot_widget,
+            self.highpass_neural_plot_widget,
+            self.speaker_plot_widget,
+            ]:
+            
+            widget.setFixedHeight(150)
+            widget.setFixedWidth(800)
+
+        for widget in [
+            self.psd_monitor_widget,
+            self.abr_pos_audio_monitor_widget,
+            self.abr_neg_audio_monitor_widget,
+            self.abr_neural_ch0_monitor_widget,
+            self.abr_neural_ch2_monitor_widget,
+            self.abr_neural_ch4_monitor_widget,
+            ]:
+            
+            widget.setFixedHeight(150)
+            widget.setFixedWidth(262)
         
         
         ## Debugging
@@ -198,6 +283,10 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         row_neural_boxes = PyQt5.QtWidgets.QGridLayout()
         row_neural_plot.addWidget(self.neural_plot_widget)
         row_neural_plot.addLayout(row_neural_boxes)
+        
+        # Fix the width of the grid of params
+        row_neural_boxes.setColumnMinimumWidth(0, 100)
+        row_neural_boxes.setColumnMinimumWidth(1, 100)
         
         # Param: neural_scope_xrange_s
         self.line_edit_neural_scope_xrange_s = PyQt5.QtWidgets.QLineEdit(
@@ -264,6 +353,10 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         row_highpass_neural_boxes = PyQt5.QtWidgets.QGridLayout()
         row_highpass_neural_plot.addWidget(self.highpass_neural_plot_widget)
         row_highpass_neural_plot.addLayout(row_highpass_neural_boxes)
+
+        # Fix the width of the grid of params
+        row_highpass_neural_boxes.setColumnMinimumWidth(0, 100)
+        row_highpass_neural_boxes.setColumnMinimumWidth(1, 100)
         
         # Param: highpass_neural_scope_yrange_mV
         self.line_edit_highpass_neural_scope_yrange_uV = PyQt5.QtWidgets.QLineEdit(    
@@ -274,6 +367,10 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
             PyQt5.QtWidgets.QLabel('highpass scope yrange (uV)'), 0, 0)
         row_highpass_neural_boxes.addWidget(
             self.line_edit_highpass_neural_scope_yrange_uV, 0, 1)
+
+        # Fix the width of the grid of params
+        row_highpass_neural_boxes.setColumnMinimumWidth(0, 100)
+        row_highpass_neural_boxes.setColumnMinimumWidth(1, 100)
         
         # Param: checkbox for plot_ch0
         self.checkbox_plot_ch0_highpass = PyQt5.QtWidgets.QCheckBox()
@@ -315,13 +412,17 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         row_highpass_neural_boxes.addWidget(self.label_highpass_neural_rms, 5, 1)
 
 
-        ## Second row: a row of audio widgets
+        ## Fourth row: a row of audio widgets
         # Horizontal: plot widget, and then Grid of params
         row_audio_plot = PyQt5.QtWidgets.QHBoxLayout(self) 
         self.layout.addLayout(row_audio_plot)
         row_audio_boxes = PyQt5.QtWidgets.QGridLayout()
         row_audio_plot.addWidget(self.speaker_plot_widget)
         row_audio_plot.addLayout(row_audio_boxes)
+
+        # Fix the width of the grid of params
+        row_audio_boxes.setColumnMinimumWidth(0, 100)
+        row_audio_boxes.setColumnMinimumWidth(1, 100)
         
         # Param: audio_scope_xrange_s
         self.line_edit_audio_scope_xrange_s = PyQt5.QtWidgets.QLineEdit(
@@ -342,14 +443,48 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         row_audio_boxes.addWidget(self.line_edit_audio_scope_yrange_mV, 0, 1)        
 
         
-        ## Third row: ABR readouts
+        ## Fifth row: clicks and PSD readouts
+        # Create and add layout for a horizontal row of widgets
+        self.click_layout = PyQt5.QtWidgets.QHBoxLayout(self) 
+        self.layout.addLayout(self.click_layout)
+        
+        # Add widgets
+        self.click_layout.addWidget(self.psd_monitor_widget)
+        self.click_layout.addWidget(self.abr_pos_audio_monitor_widget)
+        self.click_layout.addWidget(self.abr_neg_audio_monitor_widget)
+        
+        # GridLayout for params
+        click_layout_grid = PyQt5.QtWidgets.QGridLayout()
+        self.click_layout.addLayout(click_layout_grid)
+
+        # Fix the width of the grid of params
+        click_layout_grid.setColumnMinimumWidth(0, 100)
+        click_layout_grid.setColumnMinimumWidth(1, 100)
+        
+        # Param: audio_scope_xrange_s
+        self.line_edit_abr_audio_monitor_yrange_uV = (
+            PyQt5.QtWidgets.QLineEdit(str(self.abr_audio_monitor_yrange_uV)))
+        self.line_edit_abr_audio_monitor_yrange_uV.returnPressed.connect(
+            self.line_edit_abr_audio_monitor_yrange_uV_update)
+        click_layout_grid.addWidget(
+            PyQt5.QtWidgets.QLabel('clicks yrange (uV)'), 0, 0)
+        click_layout_grid.addWidget(
+            self.line_edit_abr_audio_monitor_yrange_uV, 0, 1)        
+
+        # Label: plot time required
+        self.label_plot_time_required = PyQt5.QtWidgets.QLabel('')
+        click_layout_grid.addWidget(
+            PyQt5.QtWidgets.QLabel('plotting time required (ms)'), 1, 0)
+        click_layout_grid.addWidget(
+            self.label_plot_time_required, 1, 1)            
+        
+        
+        ## Fourth row: ABR readouts
         # The bottom of the layout is horizontal
         self.abr_layout = PyQt5.QtWidgets.QHBoxLayout(self) 
         self.layout.addLayout(self.abr_layout)
         
         # Add widgets
-        self.abr_layout.addWidget(self.abr_pos_audio_monitor_widget)
-        self.abr_layout.addWidget(self.abr_neg_audio_monitor_widget)
         self.abr_layout.addWidget(self.abr_neural_ch0_monitor_widget)
         self.abr_layout.addWidget(self.abr_neural_ch2_monitor_widget)
         self.abr_layout.addWidget(self.abr_neural_ch4_monitor_widget)
@@ -357,16 +492,6 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         # GridLayout for params
         abr_layout_grid = PyQt5.QtWidgets.QGridLayout()
         self.abr_layout.addLayout(abr_layout_grid)
-        
-        # Param: audio_scope_xrange_s
-        self.line_edit_abr_audio_monitor_yrange_uV = (
-            PyQt5.QtWidgets.QLineEdit(str(self.abr_audio_monitor_yrange_uV)))
-        self.line_edit_abr_audio_monitor_yrange_uV.returnPressed.connect(
-            self.line_edit_abr_audio_monitor_yrange_uV_update)
-        abr_layout_grid.addWidget(
-            PyQt5.QtWidgets.QLabel('clicks yrange (uV)'), 0, 0)
-        abr_layout_grid.addWidget(
-            self.line_edit_abr_audio_monitor_yrange_uV, 0, 1)        
         
         # Param: abr_neural_yrange_uV
         self.line_edit_abr_neural_yrange_uV = (
@@ -398,13 +523,6 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
             PyQt5.QtWidgets.QLabel('ch4 ABR noise'), 4, 0)
         abr_layout_grid.addWidget(
             self.label_abr_ch4_noise, 4, 1)        
-
-        # Label: plot time required
-        self.label_plot_time_required = PyQt5.QtWidgets.QLabel('')
-        abr_layout_grid.addWidget(
-            PyQt5.QtWidgets.QLabel('plotting time required (ms)'), 5, 0)
-        abr_layout_grid.addWidget(
-            self.label_plot_time_required, 5, 1)            
 
         
         ## Set labels and colors of `plot_widget`
@@ -599,6 +717,11 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         self.abr_neural_ch4_monitor_widget.setYRange(
             -self.abr_neural_yrange_uV, self.abr_neural_yrange_uV)
     
+        # PSD plot
+        self.psd_monitor_widget.setLogMode(True, True)
+        self.psd_monitor_widget.setXRange(0, 4)
+        self.psd_monitor_widget.setYRange(-5, 5)
+    
     def initalize_plot_handles(self):
         """Plots line_of_current_time and line
         
@@ -646,6 +769,16 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         
         # Set up speaker handle
         self.speaker_plot_handle = self.speaker_plot_widget.plot(x=[], y=[])
+
+        # PSD widget
+        self.psd_monitor_widget_handle_l = []
+        for n_channel in range(3):
+            handle = self.psd_monitor_widget.plot(
+                x=[], y=[],
+                pen=(n_channel, len(self.neural_channels_to_plot))
+                )
+            handle.setAlpha(0.5, auto=False)
+            self.psd_monitor_widget_handle_l.append(handle)
     
         # Add a line for each
         self.abr_audio_monitor_pos_handle_l = []
@@ -748,16 +881,6 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         big_data = np.concatenate(data_chunk_l)
         headers_df = pandas.DataFrame.from_records(data_header_l)
 
-        
-        ## Alternative, unused code for getting data
-        #~ # Get from tfw
-        #~ if self.abr_device.tfw.big_data is None:
-            #~ return None, None, None
-        
-        #~ big_data = self.abr_device.tfw.big_data[
-            #~ :self.abr_device.tfw.big_data_last_col]
-        #~ headers_df = pandas.DataFrame.from_records(self.abr_device.tfw.headers_l)
-        
         
         ## Get data in real physical units
         # Convert to uV (full-scale range is 9V)
@@ -978,7 +1101,34 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
     
         times.append(('neural plots updated', datetime.datetime.now()))
 
-        
+
+        ## Plot PSD
+        Pxx_l = []
+        for ncol, col in enumerate(neural_data.T):
+            # Get handle
+            handle = self.psd_monitor_widget_handle_l[ncol]
+            
+            # Take only the last 4 s of data
+            to_psd = col[-2**16:]
+            
+            # Data is in V
+            Pxx, freqs = psd(
+                to_psd, 
+                NFFT=16384, 
+                Fs=self.abr_device.sampling_rate,
+                noverlap=8192,
+                )
+            
+            # When it's railed, Pxx will be zero everywhere
+            Pxx = Pxx + 1e-4
+            
+            # Plot
+            handle.setData(
+                x=freqs,
+                y=Pxx,
+                )
+
+
         ## Extract onsets and click params
         audio_data_hp, click_params = self.extract_audio_onsets(speaker_channel)
         
@@ -989,148 +1139,147 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
             len(audio_data_hp) - self.audio_extract_win_samples)
             ]
         
-        # Return if no clicks to analyze
-        if len(click_params) == 0:
-            return
-        
         times.append(('clicks extracted', datetime.datetime.now()))
         
         
-        ## Extract each trigger from the audio signal
-        # A 0.1 ms click is only a few samples long
-        triggered_ad = np.array([
-            audio_data_hp[
-            trigger - self.audio_extract_win_samples:
-            trigger + self.audio_extract_win_samples]
-            for trigger in click_params['t_samples']])
-
-        # DataFrame
-        triggered_ad = pandas.DataFrame(triggered_ad)
-        triggered_ad.columns = pandas.Series(range(
-            -self.audio_extract_win_samples, 
-            self.audio_extract_win_samples),
-            name='timepoint')
-        triggered_ad.index = pandas.MultiIndex.from_frame(
-            click_params[['amplitude', 'polarity', 't_samples']])
-        triggered_ad = triggered_ad.reorder_levels(
-            ['amplitude', 'polarity', 't_samples']).sort_index()
+        ## These parts are done only if there are clicks to analyze
+        if len(click_params) > 0:
         
-        times.append(('audio triggered', datetime.datetime.now()))
+            ## Extract each trigger from the audio signal
+            # A 0.1 ms click is only a few samples long
+            triggered_ad = np.array([
+                audio_data_hp[
+                trigger - self.audio_extract_win_samples:
+                trigger + self.audio_extract_win_samples]
+                for trigger in click_params['t_samples']])
+
+            # DataFrame
+            triggered_ad = pandas.DataFrame(triggered_ad)
+            triggered_ad.columns = pandas.Series(range(
+                -self.audio_extract_win_samples, 
+                self.audio_extract_win_samples),
+                name='timepoint')
+            triggered_ad.index = pandas.MultiIndex.from_frame(
+                click_params[['amplitude', 'polarity', 't_samples']])
+            triggered_ad = triggered_ad.reorder_levels(
+                ['amplitude', 'polarity', 't_samples']).sort_index()
+            
+            times.append(('audio triggered', datetime.datetime.now()))
 
 
-        ## Extract neural data locked to onsets
-        # Extract highpassed neural data around triggers
-        # Shape is (n_triggers, n_timepoints, n_channels)
-        triggered_neural = np.array([
-            neural_data_hp[trigger + abr_start_sample:trigger + abr_stop_sample]
-            for trigger in click_params['t_samples']])
-        
-        # Remove channel as a level
-        triggered_neural = triggered_neural.reshape(
-            [triggered_neural.shape[0], -1])        
+            ## Extract neural data locked to onsets
+            # Extract highpassed neural data around triggers
+            # Shape is (n_triggers, n_timepoints, n_channels)
+            triggered_neural = np.array([
+                neural_data_hp[trigger + abr_start_sample:trigger + abr_stop_sample]
+                for trigger in click_params['t_samples']])
+            
+            # Remove channel as a level
+            triggered_neural = triggered_neural.reshape(
+                [triggered_neural.shape[0], -1])        
 
-        # DataFrame
-        triggered_neural = pandas.DataFrame(triggered_neural)
-        triggered_neural.index = pandas.MultiIndex.from_frame(
-            click_params[['amplitude', 'polarity', 't_samples']])
-        triggered_neural = triggered_neural.reorder_levels(
-            ['amplitude', 'polarity', 't_samples']).sort_index()
+            # DataFrame
+            triggered_neural = pandas.DataFrame(triggered_neural)
+            triggered_neural.index = pandas.MultiIndex.from_frame(
+                click_params[['amplitude', 'polarity', 't_samples']])
+            triggered_neural = triggered_neural.reorder_levels(
+                ['amplitude', 'polarity', 't_samples']).sort_index()
 
-        # The columns are interdigitated samples and channels
-        triggered_neural.columns = pandas.MultiIndex.from_product([
-            pandas.Index(range(abr_start_sample, abr_stop_sample), name='timepoint'),
-            pandas.Index(self.neural_channels_to_plot, name='channel')
-            ])
+            # The columns are interdigitated samples and channels
+            triggered_neural.columns = pandas.MultiIndex.from_product([
+                pandas.Index(range(abr_start_sample, abr_stop_sample), name='timepoint'),
+                pandas.Index(self.neural_channels_to_plot, name='channel')
+                ])
 
-        # Put channels first
-        triggered_neural = triggered_neural.swaplevel(axis=1).sort_index(axis=1)        
+            # Put channels first
+            triggered_neural = triggered_neural.swaplevel(axis=1).sort_index(axis=1)        
 
-        times.append(('neural triggered', datetime.datetime.now()))
-
-
-        ## Aggregate
-        # Average by condition
-        avg_by_condition = triggered_neural.groupby(
-            ['polarity', 'amplitude']).mean()
-
-        # Average out polarity
-        avg_abrs = avg_by_condition.groupby('amplitude').mean()
-
-        # Average audio by condition
-        avg_audio_by_condition = triggered_ad.groupby(['amplitude', 'polarity']).mean()
-        times.append(('aggregation done', datetime.datetime.now()))
+            times.append(('neural triggered', datetime.datetime.now()))
 
 
-        ## Estimate noise level
-        # We estimate noise for each amplitude separately, and then mean
-        # them together.
-        ch0_noise = avg_abrs.loc[:, 0].loc[:, -40:-19].std(axis=1).mean()
-        ch2_noise = avg_abrs.loc[:, 2].loc[:, -40:-19].std(axis=1).mean()
-        ch4_noise = avg_abrs.loc[:, 4].loc[:, -40:-19].std(axis=1).mean()
+            ## Aggregate
+            # Average by condition
+            avg_by_condition = triggered_neural.groupby(
+                ['polarity', 'amplitude']).mean()
 
-        self.label_abr_ch0_noise.setText('{:.2f} uV'.format(ch0_noise))
-        self.label_abr_ch2_noise.setText('{:.2f} uV'.format(ch2_noise))
-        self.label_abr_ch4_noise.setText('{:.2f} uV'.format(ch4_noise))
-        
+            # Average out polarity
+            avg_abrs = avg_by_condition.groupby('amplitude').mean()
 
-        ## Plot clicks by amplitude
-        # First abslog avg_audio_by_condition for display
-        avg_audio_by_condition = np.log10(np.abs(avg_audio_by_condition))
-        avg_audio_by_condition[avg_audio_by_condition < 0] = 0
-        
-        # Reindex by amplitudes that should exist so things line up
-        avg_audio_by_condition = avg_audio_by_condition.reindex(
-            triggered_ad.index.levels[0], level='amplitude')
-        
-        # Separate negatives and positives
-        # Can be None if we haven't had any yet (eg, at beginning)
-        try:
-            neg_clicks = avg_audio_by_condition.xs(False, level='polarity')
-        except KeyError:
-            neg_clicks = None
-        
-        try:
-            pos_clicks = avg_audio_by_condition.xs(True, level='polarity')
-        except KeyError:
-            pos_clicks = None
+            # Average audio by condition
+            avg_audio_by_condition = triggered_ad.groupby(['amplitude', 'polarity']).mean()
+            times.append(('aggregation done', datetime.datetime.now()))
 
-        # Plot negatives
-        if neg_clicks is not None:
-            zobj = zip(self.abr_audio_monitor_neg_handle_l, neg_clicks.values)
+
+            ## Estimate noise level
+            # We estimate noise for each amplitude separately, and then mean
+            # them together.
+            ch0_noise = avg_abrs.loc[:, 0].loc[:, -40:-19].std(axis=1).mean()
+            ch2_noise = avg_abrs.loc[:, 2].loc[:, -40:-19].std(axis=1).mean()
+            ch4_noise = avg_abrs.loc[:, 4].loc[:, -40:-19].std(axis=1).mean()
+
+            self.label_abr_ch0_noise.setText('{:.2f} uV'.format(ch0_noise))
+            self.label_abr_ch2_noise.setText('{:.2f} uV'.format(ch2_noise))
+            self.label_abr_ch4_noise.setText('{:.2f} uV'.format(ch4_noise))
+            
+            
+            ## Plot clicks by amplitude
+            # First abslog avg_audio_by_condition for display
+            avg_audio_by_condition = np.log10(np.abs(avg_audio_by_condition))
+            avg_audio_by_condition[avg_audio_by_condition < 0] = 0
+            
+            # Reindex by amplitudes that should exist so things line up
+            avg_audio_by_condition = avg_audio_by_condition.reindex(
+                triggered_ad.index.levels[0], level='amplitude')
+            
+            # Separate negatives and positives
+            # Can be None if we haven't had any yet (eg, at beginning)
+            try:
+                neg_clicks = avg_audio_by_condition.xs(False, level='polarity')
+            except KeyError:
+                neg_clicks = None
+            
+            try:
+                pos_clicks = avg_audio_by_condition.xs(True, level='polarity')
+            except KeyError:
+                pos_clicks = None
+
+            # Plot negatives
+            if neg_clicks is not None:
+                zobj = zip(self.abr_audio_monitor_neg_handle_l, neg_clicks.values)
+                for handle, topl in zobj:
+                    handle.setData(
+                        x=avg_audio_by_condition.columns.values, y=topl)
+
+            # Plot positives
+            if pos_clicks is not None:
+                zobj = zip(self.abr_audio_monitor_pos_handle_l, pos_clicks.values)
+                for handle, topl in zobj:
+                    handle.setData(
+                        x=avg_audio_by_condition.columns.values, y=topl)
+            
+            
+            ## Plot ABR by amplitude
+            # Reindex by amplitudes that should exist so things line up
+            avg_abrs = avg_abrs.reindex(
+                triggered_ad.index.levels[0], level='amplitude')
+            
+            # Plot ch0
+            abr_ch0 = avg_abrs.loc[:, 0]
+            zobj = zip(self.abr_ch0_handle_l, abr_ch0.values)
             for handle, topl in zobj:
-                handle.setData(
-                    x=avg_audio_by_condition.columns.values, y=topl)
+                handle.setData(x=abr_ch0.columns.values, y=topl)
 
-        # Plot positives
-        if pos_clicks is not None:
-            zobj = zip(self.abr_audio_monitor_pos_handle_l, pos_clicks.values)
+            # Plot ch2
+            abr_ch2 = avg_abrs.loc[:, 2]
+            zobj = zip(self.abr_ch2_handle_l, abr_ch2.values)
             for handle, topl in zobj:
-                handle.setData(
-                    x=avg_audio_by_condition.columns.values, y=topl)
-        
-        
-        ## Plot ABR by amplitude
-        # Reindex by amplitudes that should exist so things line up
-        avg_abrs = avg_abrs.reindex(
-            triggered_ad.index.levels[0], level='amplitude')
-        
-        # Plot ch0
-        abr_ch0 = avg_abrs.loc[:, 0]
-        zobj = zip(self.abr_ch0_handle_l, abr_ch0.values)
-        for handle, topl in zobj:
-            handle.setData(x=abr_ch0.columns.values, y=topl)
+                handle.setData(x=abr_ch2.columns.values, y=topl)
 
-        # Plot ch2
-        abr_ch2 = avg_abrs.loc[:, 2]
-        zobj = zip(self.abr_ch2_handle_l, abr_ch2.values)
-        for handle, topl in zobj:
-            handle.setData(x=abr_ch2.columns.values, y=topl)
-
-        # Plot ch4
-        abr_ch4 = avg_abrs.loc[:, 4]
-        zobj = zip(self.abr_ch4_handle_l, abr_ch4.values)
-        for handle, topl in zobj:
-            handle.setData(x=abr_ch4.columns.values, y=topl)
+            # Plot ch4
+            abr_ch4 = avg_abrs.loc[:, 4]
+            zobj = zip(self.abr_ch4_handle_l, abr_ch4.values)
+            for handle, topl in zobj:
+                handle.setData(x=abr_ch4.columns.values, y=topl)
 
         
         ## Print debug timing information
