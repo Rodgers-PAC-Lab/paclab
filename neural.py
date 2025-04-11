@@ -1,13 +1,105 @@
 """Functions for loading and synchronizing behavioral, neural, video data"""
 
 import os
+import datetime
+import xml.etree.ElementTree
+import glob
 import numpy as np
 import pandas
 import scipy
 import matplotlib.pyplot as plt
 import my
 import my.plot
-import xml.etree.ElementTree
+
+def find_logger(neural_root, session_name):
+    """Determine which logger was used for a certain session name.
+    
+    Arguments:
+    ---
+    neural_root : str
+        A full path to 20241125_HSW, or whichever directory contains the
+        logger files.
+    
+    session_name : str
+        A session name, without '.bin'
+    
+    Flow
+    ---
+    * Finds all subdirectories of `neural_root` that begin with "logger_"
+    * Checks each one for the file `session_name` + ".bin"
+    * Raises IOError if it's found in multiple logger subdirectories
+    * Raises FileNotFoundError if session isn't found anywhere
+    
+    Returns: str or None
+        The logger name if it was found, or None if the session wasn't found
+        This will be like '628DAB' not 'logger_628DAB'
+    """
+    # Find all logger directories
+    logger_dirs = glob.glob(os.path.join(neural_root, 'logger_*'))
+    
+    # Find out which one contains the session
+    logger = None
+    for test_logger_dir in logger_dirs:
+        # Get logger name from the logger directory name
+        test_logger_name = os.path.split(test_logger_dir)[1].replace(
+            'logger_', '')
+        
+        # See if this session exists
+        if os.path.exists(os.path.join(test_logger_dir, session_name + '.bin')):
+            # Check it's not a duplicate
+            if logger is not None:
+                raise IOError(
+                    f'{session_name} found in both {logger} and '
+                    f'{test_logger_name}')
+            
+            # Save logger
+            logger = test_logger_name
+    
+    if logger is None:
+        raise FileNotFoundError(
+            f'cannot find {session_name} in any logger directory')
+    
+    return logger
+    
+def convert_dataflow_to_channel_map(dataflow):
+    """Convert a dataflow to a channel_map dict suitable for kilosort.
+    
+    dataflow : DataFrame
+        Must have columns: xcoord, ycoord, kcoord
+    
+    Returns: dict
+        n_chan : the number of channels in the binary file
+        chanMap : 0-based index of the channels to take
+        xc : x-coordinate of each channel in microns
+        yc : y-coordinate of each channel in microns
+        kcoords : group number of each channel
+    """
+    ## Create the channel map for kilosort
+    # Assume the channels have already been ordered properly in the binary file
+    # (that is, in the same order as `dataflow` above)
+    # so the channel map for kilosort is simply an arange
+    # TODO: figure out how to handle dropped channels. I think in that case,
+    # 'n_chan' stays the same, but chanMap0ind is missing some entries
+    Nchannels = len(dataflow)
+    chanMap0ind = np.arange(Nchannels)
+    
+    # Extract from dataflow
+    xcoords = dataflow['xcoord'].values.astype(float)
+    ycoords = dataflow['ycoord'].values.astype(float)
+    kcoords = dataflow['kcoord'].values
+
+    # Save the channel map as a matfile in the session directory
+    # syntax of these keys has changed for json files vs old matlab files
+    # the tolist() is to convert to native python types, not numpy
+    ks_json = {
+        'n_chan': Nchannels,
+        'chanMap': chanMap0ind.tolist(),
+        'xc': xcoords.tolist(),
+        'yc': ycoords.tolist(),
+        'kcoords': kcoords.tolist(),
+        }
+    
+    return ks_json
 
 def load_metadata_from_xml(neural_root, logger, session_name):
     """Load metadata like sampling rate from XML file for a logger recording
@@ -21,17 +113,78 @@ def load_metadata_from_xml(neural_root, logger, session_name):
         Name of recording, eg 
         'HSW_2025_03_31__17_52_42__09min_58sec__hsamp_128ch_14285sps.bin'
         This is used only to extract the date string by indexing [4:24]
+        So it doesn't matter if the ".bin" has been dropped or not
     
     Flow
     ---
     * Form the expected XML file name
-    * Load it
-    * Extract channel count and sampling rate
+    * Raises FileNotFoundError if no XML filename found
+    * Load it with xml.etree
+    * Parse it into expected datatypes
 
-    Returns: channel_count, sampling_rate
-        channel_count : int, number of channels
-        sampling_rate : float
+    Returns: xml_file, xml_data
+        xml_file : str, full path to xml file
+        xml_data : dict with the following keys
+            'binary_filename': str
+                Full path to binary file
+        
+            'sampling_rate_sps' : float, in Hz
+                Values around 14285.3 are stored wrong. They are corrected 
+                by this script to 32e6 / 2240 = 14285.714285 repeating
+
+            'channel_count : int
+                This replaces key 'rec_mode_name' (like '"64ch"') and
+                rec_mode (0=64ch, 3=128ch)
+            
+            'approx_duration_s': int
+                This is stored as '0' whenever 'is_still_recording' is True,
+                but this function will convert that to np.nan
+                
+                Otherwise, this will be equal to the difference between
+                ts_approx_stop_ack and ts_approx_start_ack.
+                
+                This is often equal to precise_duration_s, and very often within
+                +/- 1 of precise_duration_s. When it is a lot longer than
+                precise_duration_s (more than 2 s), likely something went
+                wrong. I've never seen it more than 1 s shorter than
+                precise_duraton_s.
+
+            'precise_duration_s': int
+                This is stored as '0' whenever 'is_still_recording' is True,
+                but this function will convert that to np.nan
+
+            'is_still_recording' : bool
+                When True, something has likely gone wrong
+            
+            'stream_duration_s' : int
+                This one will be 0 if 'is_still_recording' is True
+            
+            'sync_frequency' : float
+                1e6 if this key was "1.000 MHz"
+                100e3 if this key was "100.000 kHz"
+                np.nan if the key was "0.0"
+                The redundant key "sync_enabled" is checked to be 0 when 
+                this value is np.nan, and 1 otherwise, and then dropped
+                
+            'version' : str
+            
+            'ts_approx_start_ack' : datetime
+                Parsed from "YYYY.MM.DD HH:MM:SS"
+            
+            'ts_approx_stop_ack' : datetime
+                Parsed from "YYYY.MM.DD HH:MM:SS"
+                This is stored as '0' whenever 'is_still_recording' is True,
+                but this function will convert that to np.nan
+            
+            'ts_approx_start_cmd' : int, datetime
+                Parsed from seconds from epoch
+        
+        The key "session_type" is always "recording", so it is checked and
+        dropped.
+        The key "valid", referring to headstage stack, is always True, 
+        so it is checked and dropped.
     """
+    
     ## Find the corresponding xml file
     # Get date string from session name
     date_string = session_name[4:24]
@@ -44,26 +197,195 @@ def load_metadata_from_xml(neural_root, logger, session_name):
         neural_root, f'record_ID{logger}_{date_string}.xml')
     
     # Check that it exists
-    assert os.path.exists(xml_file)
+    if not os.path.exists(xml_file):
+        raise FileNotFoundError(f"xml file does not exist at {xml_file}")
 
     
     ## Parse xml
-    tree = xml.etree.ElementTree.parse(xml_file)
+    # Parse with xml module
+    try:
+        tree = xml.etree.ElementTree.parse(xml_file)
+    except xml.etree.ElementTree.ParseError:
+        raise IOError(f"cannot parse xml at {xml_file}")
 
-    # Get channel count
-    rec_mode_name_nodes = tree.findall('RECORD/REC_MODE_NAME')
-    assert len(rec_mode_name_nodes) == 1
-    channel_count = int(
-        rec_mode_name_nodes[0].text.replace('"', '').replace('ch', ''))
+    # Helper function
+    def helper_get(tree, path):
+        nodes = tree.findall(path)
+        assert len(nodes) == 1
+        return nodes[0].text
 
-    # Get sampling rate
-    sampling_rate_nodes = tree.findall('SETTINGS/SAMPLING_RATE_SPS')
-    assert len(sampling_rate_nodes) == 1
-    neural_fs = float(sampling_rate_nodes[0].text)
+    # Parse
+    xml_data = {}
+    xml_data['rec_mode_name'] = (
+        helper_get(tree, 'RECORD/REC_MODE_NAME'))
+    xml_data['sampling_rate_sps'] = float(
+        helper_get(tree, 'SETTINGS/SAMPLING_RATE_SPS'))
+    xml_data['rec_mode'] = (
+        helper_get(tree, 'RECORD/REC_MODE'))
+    xml_data['approx_duration_s'] = float(
+        helper_get(tree, 'RECORD/APPROX_DURATION_S'))
+    xml_data['stream_duration_s'] = float(
+        helper_get(tree, 'RECORD/STREAM_DURATION_S'))
+    xml_data['precise_duration_s'] = float(
+        helper_get(tree, 'RECORD/PRECISE_DURATION_S'))
+    xml_data['sync_enabled'] = (
+        helper_get(tree, 'SYNCHRONISATION/SYNC_ENABLED'))
+    xml_data['sync_frequency'] = (
+        helper_get(tree, 'SYNCHRONISATION/SYNC_FREQUENCY'))
+    xml_data['session_type'] = (
+        helper_get(tree, 'RECORD/SESSION_TYPE'))
+    xml_data['is_still_recording'] = (
+        helper_get(tree, 'RECORD/IS_STILL_RECORDING'))
+    xml_data['version'] = (
+        helper_get(tree, 'INFO/VERSION'))
+    xml_data['valid'] = (
+        helper_get(tree, 'HEADSTAGE/VALID'))
+    xml_data['ts_approx_start_cmd'] = (
+        helper_get(tree, 'RECORD/TS_APPROX_START_CMD'))
+    xml_data['ts_approx_start_ack'] = (
+        helper_get(tree, 'RECORD/TS_APPROX_START_ACK'))
+    xml_data['ts_approx_stop_ack'] = (
+        helper_get(tree, 'RECORD/TS_APPROX_STOP_ACK'))
 
     
+    ## Additional parsing
+    # Ensure these strs are ints
+    for key in [
+            'ts_approx_start_cmd', 
+            'approx_duration_s', 
+            'stream_duration_s', 
+            'precise_duration_s',
+            'sync_enabled',
+            ]:
+        assert int(xml_data[key]) == float(xml_data[key])
+        xml_data[key] = int(xml_data[key])
+
+    # Ensure these strs are bools
+    for key in [
+            'valid', 
+            'is_still_recording', 
+            ]:
+        if xml_data[key] == 'true':
+            xml_data[key] = True
+        
+        elif xml_data[key] == 'false':
+            xml_data[key] = False
+        
+        else:
+            raise ValueError(
+                f'invalid boolean value {xml_data[key]} for key {key}')
+    
+    # Set channel count, and pop redundant rec_mode and rec_mode_name
+    xml_data['channel_count'] = int(
+        xml_data['rec_mode_name'].replace('"', '').replace('ch', ''))
+    if xml_data['channel_count'] == 64:
+        assert xml_data['rec_mode_name'] == '"64ch"'
+        assert xml_data['rec_mode'] == '0'
+        xml_data.pop('rec_mode_name')
+        xml_data.pop('rec_mode')
+    
+    elif xml_data['channel_count'] == 128:
+        assert xml_data['rec_mode_name'] == '"128ch"'
+        assert xml_data['rec_mode'] == '3'
+        xml_data.pop('rec_mode_name')
+        xml_data.pop('rec_mode')
+    
+    else:
+        raise ValueError("unsupported channel count: {}".format(
+            xml_data['channel_count']))
+    
+    # Convert this integer timestamp to datetime
+    xml_data['ts_approx_start_cmd'] = datetime.datetime.fromtimestamp(
+        xml_data['ts_approx_start_cmd'])
+    
+    # Convert these string timestamps to datetime
+    xml_data['ts_approx_start_ack'] = datetime.datetime.strptime(
+        xml_data['ts_approx_start_ack'], '%Y.%m.%d %H:%M:%S')
+    
+    # Deal with is_still_recording
+    if not xml_data['is_still_recording']:
+        # The usual case
+        xml_data['ts_approx_stop_ack'] = datetime.datetime.strptime(
+            xml_data['ts_approx_stop_ack'], '%Y.%m.%d %H:%M:%S')    
+    else:
+        # The broken case
+        xml_data['ts_approx_stop_ack'] = np.nan
+        
+        # This will be set to zero, but is actually null
+        assert xml_data['approx_duration_s'] == 0
+        xml_data['approx_duration_s'] = np.nan
+
+        # This will be set to zero, but is actually null
+        assert xml_data['precise_duration_s'] == 0
+        xml_data['precise_duration_s'] = np.nan
+
+    # Drop this useless one
+    assert xml_data['session_type'] == 'recording'
+    xml_data.pop('session_type')
+    
+    # Drop this useless one
+    assert xml_data['valid'] == True
+    xml_data.pop('valid')
+    
+    # Convert this one to more meaningful units
+    if xml_data['sync_frequency'] == '0.0':
+        xml_data['sync_frequency'] = np.nan
+        assert xml_data['sync_enabled'] == 0
+    
+    elif xml_data['sync_frequency'] == '100.000 kHz':
+        xml_data['sync_frequency'] = 100e3
+        assert xml_data['sync_enabled'] == 1
+    
+    elif xml_data['sync_frequency'] == '1.000 MHz':
+        xml_data['sync_frequency'] = 1e6
+        assert xml_data['sync_enabled'] == 1
+    
+    else:
+        raise ValueError(
+            f"invalid sync_frequency: {xml_data['sync_frequency']}")
+
+    # Drop this now useless one
+    xml_data.pop('sync_enabled')
+    
+
+    ## Correct 14285 which is stored wrong
+    if (
+            (xml_data['sampling_rate_sps'] > 14285) and 
+            (xml_data['sampling_rate_sps'] < 14286)
+        ):
+        
+        # The correct value is 14285.714285 repeating
+        xml_data['sampling_rate_sps'] = 32e6 / 2240
+
+
+    ## Additionally add metadata about the binary file
+    xml_data['binary_filename'] = os.path.join(
+        neural_root, f'logger_{logger}', session_name + '.bin')
+
+    # Calculate size of file in bytes
+    packed_file_size_bytes = os.path.getsize(xml_data['binary_filename'])
+    
+    # Calculate length of recording in samples
+    offset = 8
+    packed_file_size_samples = (
+        (packed_file_size_bytes - offset) // xml_data['channel_count'] // 2)
+    
+    # Check file size makes sense
+    expected_size = (
+        packed_file_size_samples * xml_data['channel_count'] * 2 + offset)
+    if expected_size != packed_file_size_bytes:
+        raise IOError(
+            f'{xml_data["binary_filename"]} was {packed_file_size_bytes} '
+            'but it should have been '
+            f'{expected_size} bytes')
+    
+    # Convert file size to time
+    xml_data['file_duration_s'] = (
+        packed_file_size_samples / xml_data['sampling_rate_sps'])
+    
+    
     ## Return
-    return channel_count, neural_fs
+    return xml_file, xml_data
 
 def form_analog_filename(analog_root, analog_session, experiment_number=1, 
     recording_number=1):
@@ -250,6 +572,7 @@ def make_plot(
     spike_channels=None,
     spike_colors=None,
     plot_kwargs={},
+    verbose=True,
     ):
     """Plot a vertical stack of channels in the same ax.
     
@@ -308,7 +631,9 @@ def make_plot(
 
     # If too much data is requested, then break
     got_size = len(t_ds) * len(ch_list)
-    print("getting %g datapoints..." % got_size)
+    if verbose:
+        print("getting %g datapoints..." % got_size)
+    
     if len(t_ds) * len(ch_list) > max_data_size:
         raise ValueError(
             ("you requested %g datapoints " % got_size) +
