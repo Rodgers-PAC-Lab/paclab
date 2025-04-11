@@ -28,7 +28,7 @@ def find_logger(neural_root, session_name):
     * Finds all subdirectories of `neural_root` that begin with "logger_"
     * Checks each one for the file `session_name` + ".bin"
     * Raises IOError if it's found in multiple logger subdirectories
-    * Raises IOError if session isn't found anywhere
+    * Raises FileNotFoundError if session isn't found anywhere
     
     Returns: str or None
         The logger name if it was found, or None if the session wasn't found
@@ -56,7 +56,8 @@ def find_logger(neural_root, session_name):
             logger = test_logger_name
     
     if logger is None:
-        raise IOError(f'cannot find {session_name} in any logger directory')
+        raise FileNotFoundError(
+            f'cannot find {session_name} in any logger directory')
     
     return logger
     
@@ -571,6 +572,7 @@ def make_plot(
     spike_channels=None,
     spike_colors=None,
     plot_kwargs={},
+    verbose=True,
     ):
     """Plot a vertical stack of channels in the same ax.
     
@@ -629,7 +631,9 @@ def make_plot(
 
     # If too much data is requested, then break
     got_size = len(t_ds) * len(ch_list)
-    print("getting %g datapoints..." % got_size)
+    if verbose:
+        print("getting %g datapoints..." % got_size)
+    
     if len(t_ds) * len(ch_list) > max_data_size:
         raise ValueError(
             ("you requested %g datapoints " % got_size) +
