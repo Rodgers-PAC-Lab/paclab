@@ -198,8 +198,97 @@ def compute_all2all_distances(pred, edges = None, index_base = 1):
     
     return distances
                 
+## Egocentering and alignment
+def egocenter(pred, bindcenter = 5, align = '3d', b1 = 3, b2 = 6, index_base = 1, keep_bindcenter = False):
+    '''
+    Egocenter data so that the bindcenter keypoint is situated at the origin. Optionally, this function
+    also rotates (aligns) the skeleton so that the vector from b2 to b1 always points east.
+    Adapted from Kanishk Jain's demoutils.egoh5 function in the mmpy repo
+
+    pred: DANNCE prediction data. Expected to be shape Tx1x3xK or Tx3xK
+    bindcenter: the index of the keypoint at which the coordinate frame will be centered. Default: 5, which corresponds to 'SpineM' in
+                mouse22 assuming 1-indexing
+    align: a string which specifies the alignment mode or None. Default: '3d'. Possible values: 
+            - '3d': apply 3D alignment so that the alignment vector points to [1, 0, 0]
+            - '2d': apply 2D alignment so that the alignment vector points to [1, 0, z], where z is the pre-alignment z coordinate of the alignment vector
+            - None: don't apply any alignment
+    b1: the index of the keypoint that acts as the endpoint of the alignment vector. Default: 3, which corresponds to 'Snout' in mouse22
+        assuming 1-indexing
+    b2: the index of the keypoint that acts as the start point of the alignment vector. Default: 6, which corresponds to 'Tail(base)' in
+        mouse22 assuming 1-indexing (Note: bindcenter is assumed to be indexed between b1 and b2)
+    index_base: specifies whether joint indices are specified as indexed from 0 or 1. Only needed if angles_to_compute is given
+                as list of keypoint indices. Default: 1
+    keep_bindcenter: boolean flag which determines whether bindcenter will be retained in the output. Default: False
+
+    returns ego: if keep_bindcenter is False, a T x 3 x K-1 array containing egocentered coordinates for each keypoint excluding bindcenter across time
+                 if keep_bindcenter is True, then an array with same shape as pred
+    '''
+    if len(pred.shape) > 3:
+        pred = np.squeeze(pred)
+
+    if index_base == 1:
+        bindcenter -= 1
+        b1 -= 1
+        b2 -= 1
+    elif index_base !=0:
+        raise ValueError
+    ## First do the egocentering
 
 
+    # Apply egocentering by subtracing bindcenter position
+    ego = pred - pred[:, [bindcenter for i in range(pred.shape[2]], :]
+
+    if not keep_bindcenter:
+        # Get indices of all keypoints that aren't the bindcenter
+        idx_to_keep = np.setdiff1d(np.arange(pred.shape[2]), bindcenter)
+        
+        # Only keep the non-bindcenter points (since bindcenter is always at 0,0,0)
+        ego = ego[:, :, idx_to_keep]
+    
+    if align is None:
+        return ego
+    
+    ## Now do the alignment
+    if align == '2d':
+        # TODO: implement 2D alignment
+        raise NotImplementedError
+        
+    # Grab the alignment vector
+    if not keep_bindcenter:
+        alignment_vector = ego[:, :, b1] - ego[:, b2 - 1] # subtract 1 to account for bindcenter removal
+    else:
+        alignment_vector = ego[:, :, b1] - ego[:, :, b2]
+
+    # Normalize alignment vector
+    alignment_vector /= np.linalg.norm(alignment_vector, axis=1)[:, np.newaxis]
+
+    ## Compute and apply rotation matrix to each timepoint
+    # Target is east
+    target = np.array([1.0, 0.0, 0.0])
+    
+    for t in range(ego.shape[0]):
+        v = alignment_vector[t]
+        
+        # Need an axis of rotation orthogonal to the alignment plane
+        axis = np.cross(v, target)
+        axis /= np.linalg.norm(axis)
+        # Also need an angle of rotation
+        angle = np.arccos(np.clip(np.dot(v, target), -1.0, 1.0))
+        
+        ## Compute rotation using Rodrigues' rotation formula
+        # First set up the cross-product matrix
+        K = np.array([
+            [0, -axis[2], axis[1]],
+            [axis[2], 0, -axis[0]],
+            [-axis[1], axis[0], 0]
+        ])
+
+        # Then apply the formula: I + sin(angle)K + (1 - cos(angle))K^2
+        R = np.eye(3) + np.sin(angle) * K + (1 - np.cos(angle)) * (K @ K)
+        
+        # Finally apply the rotation
+        ego[t] = R @ ego[t]
+    return ego
 
 
 
