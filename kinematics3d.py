@@ -313,6 +313,36 @@ def egocenter(pred, bindcenter = 5, align = '3d', b1 = 3, b2 = 6, index_base = 1
     
     return ego
 
+# Smoothing and derivatives
+def gaussianfilterdata(pred, sigma = 1):
+    '''
+    Convolve data with a Gaussian. This computes smoothed position.
+    pred: DANNCE prediction data. Expected to be shape Tx1x3xK or Tx3xK
+    sigma: the standard deviation of the Gaussian kernel
+    '''
+    raise NotImplementedError
+    
+    L = pred.shape[0]
+    xx = (np.arange(1, L) - np.round(L/2)).T
+    g = -xx * np.exp(-.5 * xx**2 / sigma**2) / np.sqrt(2*np.pi*sigma**2) # This is probably wrong. Need to check this
+    ddt = np.fft.fftshift(np.fft.ifft(np.fft.fft(pred[:-1]) * np.fft.fft(g)))
+    return ddt
+    
+def gaussianfilterdata_derivative(pred, sigma = 1):
+    '''
+    Compute smoothed velocities by convolving position with the derivative of a Gaussian.
+    Adapted from old matlab code written by Gordon.
 
+    pred: DANNCE prediction data. Expected to be shape Tx1x3xK or Tx3xK
+    sigma: the standard deviation of the Gaussian derivative kernel. According to Gordon, this 
+           approximately maps on to window size / 2 for a sliding window
+
+    '''
+    L = pred.shape[0]
+    xx = (np.arange(1, L) - np.round(L/2)).T
+    
+    g = -xx * np.exp(-.5 * xx**2 / sigma**2) / np.sqrt(np.pi*sigma**6)
+    ddt = np.fft.fftshift(np.fft.ifft(np.fft.fft(pred[:-1]) * np.fft.fft(g)))
+    return ddt
 
     
