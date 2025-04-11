@@ -250,44 +250,67 @@ def egocenter(pred, bindcenter = 5, align = '3d', b1 = 3, b2 = 6, index_base = 1
     
     ## Now do the alignment
     if align == '2d':
-        # TODO: implement 2D alignment
-        raise NotImplementedError
-        
-    # Grab the alignment vector
-    if not keep_bindcenter:
-        alignment_vector = ego[:, :, b1] - ego[:, b2 - 1] # subtract 1 to account for bindcenter removal
-    else:
-        alignment_vector = ego[:, :, b1] - ego[:, :, b2]
-
-    # Normalize alignment vector
-    alignment_vector /= np.linalg.norm(alignment_vector, axis=1)[:, np.newaxis]
-
-    ## Compute and apply rotation matrix to each timepoint
-    # Target is east
-    target = np.array([1.0, 0.0, 0.0])
+        # Grab the alignment vector
+        if not keep_bindcenter:
+            alignment_vector = ego[:, :2, b1] - ego[:, :2, b2 - 1] # subtract 1 to account for bindcenter removal
+        else:
+            alignment_vector = ego[:, :2, b1] - ego[:, :2, b2]
+            
+        # Normalize alignment vector
+        alignment_vector /= np.linalg.norm(alignment_vector, axis=1)[:, np.newaxis]
     
-    for t in range(ego.shape[0]):
-        v = alignment_vector[t]
+        ## Compute and apply rotation matrix to each timepoint
+        # Target is east
+        target = np.array([1.0, 0.0])
         
-        # Need an axis of rotation orthogonal to the alignment plane
-        axis = np.cross(v, target)
-        axis /= np.linalg.norm(axis)
-        # Also need an angle of rotation
-        angle = np.arccos(np.clip(np.dot(v, target), -1.0, 1.0))
+        for t in range(ego.shape[0]):
+            v = alignment_vector[t]
+            
+            R = np.array([
+                [v[0], v[1]],
+                [-v[1], v[0]] 
+            ])
+            
+            # Apply rotation
+            ego[t, :2, :] = R @ ego[t, :2, :]
         
-        ## Compute rotation using Rodrigues' rotation formula
-        # First set up the cross-product matrix
-        K = np.array([
-            [0, -axis[2], axis[1]],
-            [axis[2], 0, -axis[0]],
-            [-axis[1], axis[0], 0]
-        ])
-
-        # Then apply the formula: I + sin(angle)K + (1 - cos(angle))K^2
-        R = np.eye(3) + np.sin(angle) * K + (1 - np.cos(angle)) * (K @ K)
+    elif align == '3d':
+        # Grab the alignment vector
+        if not keep_bindcenter:
+            alignment_vector = ego[:, :, b1] - ego[:, :, b2 - 1] # subtract 1 to account for bindcenter removal
+        else:
+            alignment_vector = ego[:, :, b1] - ego[:, :, b2]
+    
+        # Normalize alignment vector
+        alignment_vector /= np.linalg.norm(alignment_vector, axis=1)[:, np.newaxis]
+    
+        ## Compute and apply rotation matrix to each timepoint
+        # Target is east
+        target = np.array([1.0, 0.0, 0.0])
         
-        # Finally apply the rotation
-        ego[t] = R @ ego[t]
+        for t in range(ego.shape[0]):
+            v = alignment_vector[t]
+            
+            # Need an axis of rotation orthogonal to the alignment plane
+            axis = np.cross(v, target)
+            axis /= np.linalg.norm(axis)
+            # Also need an angle of rotation
+            angle = np.arccos(np.clip(np.dot(v, target), -1.0, 1.0))
+            
+            ## Compute rotation using Rodrigues' rotation formula
+            # First set up the cross-product matrix
+            K = np.array([
+                [0, -axis[2], axis[1]],
+                [axis[2], 0, -axis[0]],
+                [-axis[1], axis[0], 0]
+            ])
+    
+            # Then apply the formula: I + sin(angle)K + (1 - cos(angle))K^2
+            R = np.eye(3) + np.sin(angle) * K + (1 - np.cos(angle)) * (K @ K)
+            
+            # Finally apply the rotation
+            ego[t] = R @ ego[t]
+    
     return ego
 
 
