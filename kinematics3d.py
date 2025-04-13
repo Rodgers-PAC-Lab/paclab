@@ -210,7 +210,7 @@ def compute_joint_angles(pred, edges, parsed_joint_names = None, angles_to_compu
         elif mode == 'orientations_only':
             orientations = np.zeros((pred.shape[0], 0, 9))
         
-        points_this_joint = np.zeros((n_angles_this_joint, 3)    
+        points_this_joint = np.zeros((n_angles_this_joint, 3))    
         # Iterate over each pair of connected nodes and compute joint angle. Will skip over joints with fewer than 2 connections
         l = 0
         for j in range(len(connected_nodes) - 1): # no need to consider the last connected node
@@ -289,15 +289,15 @@ def compute_all2all_distances(pred, edges = None, index_base = 1):
             raise ValueError
         distances = np.zeros((pred.shape[0], len(edges)))
         
-        for i, edge in zip(range(edges), edges):
+        for i, edge in zip(range(edges.shape[0]), edges):
             distances[:, i] = compute_distance(pred[:, :, edge[0]], pred[:, :, edge[1]])
             
     else:
         ## Compute true all2all distance matrix
-        distances = np.zeros((pred.shape[0], pred.shape[2]*(pred.shape[2] - 1) / 2)) # n(n-1) / 2 pairwise distances between n keypoints
+        distances = np.zeros((pred.shape[0], int(pred.shape[2]*(pred.shape[2] - 1) / 2))) # n(n-1) / 2 pairwise distances between n keypoints
         k = 0
         for i in range(pred.shape[2] - 1):
-            for j in range(i, pred.shape[2]):
+            for j in range(i + 1, pred.shape[2]):
                 distances[:, k] = compute_distance(pred[:, :, i], pred[:, :, j])
                 k += 1
     
@@ -341,12 +341,11 @@ def egocenter(pred, bindcenter = 5, align = '3d', b1 = 3, b2 = 6, index_base = 1
 
 
     # Apply egocentering by subtracing bindcenter position
-    ego = pred - pred[:, [bindcenter for i in range(pred.shape[2]], :]
+    ego = pred - pred[:, :, [bindcenter for i in range(pred.shape[2])]]
 
     if not keep_bindcenter:
         # Get indices of all keypoints that aren't the bindcenter
         idx_to_keep = np.setdiff1d(np.arange(pred.shape[2]), bindcenter)
-        
         # Only keep the non-bindcenter points (since bindcenter is always at 0,0,0)
         ego = ego[:, :, idx_to_keep]
     
