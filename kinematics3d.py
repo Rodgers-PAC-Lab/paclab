@@ -119,11 +119,11 @@ def compute_rotation_matrix(k1, kv, k2):
     x_mag = np.sqrt(x[:, 0]**2 + x[:, 1]**2 + x[:, 2]**2)
     x_norm = x / np.column_stack((x_mag, x_mag, x_mag))
 
-    z_norm = np.expand_dims(z_norm, axis = 1)
-    y_norm = np.expand_dims(y_norm, axis = 1)
-    x_norm = np.expand_dims(x_norm, axis = 1)
+    z_norm = np.expand_dims(z_norm, axis = 2)
+    y_norm = np.expand_dims(y_norm, axis = 2)
+    x_norm = np.expand_dims(x_norm, axis = 2)
     
-    return np.concatenate((z_norm, y_norm, x_norm), axis = 1)
+    return np.concatenate((z_norm, y_norm, x_norm), axis = 2)
 
 
 def compute_orientation(pred, k1, kv, k2, index_base = 1):
