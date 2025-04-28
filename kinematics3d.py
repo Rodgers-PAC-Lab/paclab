@@ -89,7 +89,44 @@ def compute_joint_angle(pred, k1, kv, k2, degrees = True, index_base = 1):
         
     return angle
 
-def compute_orientation(pred, k1, kv, k2, index_base = True):
+def compute_rotation_matrix(k1, kv, k2):
+    '''
+    Compute rotation matrix for the point at kv relative to the vectors from kv
+    through k1 and k2. The local z-axis is the vector from kv to k2. The local x-
+    axis is the vector orthogonal to z and coplanar with z and the vector between
+    kv and k1. The local y-axis is the cross product of x and z.
+    
+    k1: T x 3 position vector. Assumed to be the position of the joint proximal to kv
+    kv: T x 3 position vector.
+    k2: T x 3 position vector. Assumed to be the position of the joint distal to kv
+
+    returns T x 3 x 3 tensor giving rotation matrix
+    '''
+    z = k2 - kv
+    x_ref = k1 - kv
+    
+    z_mag = np.sqrt(z[:, 0]**2 + z[:, 1]**2 + z[:, 2]**2)
+    x_ref_mag = np.sqrt(x_ref[:, 0]**2 + x_ref[:, 1]**2 + x_ref[:, 2]**2)
+
+    z_norm = z / np.column_stack((z_mag, z_mag, z_mag))
+    x_ref_norm = x_ref / np.column_stack((x_ref_mag, x_ref_mag, x_ref_mag))
+    
+    y = np.cross(z_norm, x_ref_norm)
+    y_mag = np.sqrt(y[:, 0]**2 + y[:, 1]**2 + y[:, 2]**2)
+    y_norm = y / np.column_stack((y_mag, y_mag, y_mag))
+
+    x = np.cross(y_norm, z_norm)
+    x_mag = np.sqrt(x[:, 0]**2 + x[:, 1]**2 + x[:, 2]**2)
+    x_norm = x / np.column_stack((x_mag, x_mag, x_mag))
+
+    z_norm = np.expand_dims(z_norm, axis = 1)
+    y_norm = np.expand_dims(y_norm, axis = 1)
+    x_norm = np.expand_dims(x_norm, axis = 1)
+    
+    return np.concatenate((z_norm, y_norm, x_norm), axis = 1)
+
+
+def compute_orientation(pred, k1, kv, k2, index_base = 1):
     '''
     Compute orientation matrices across time for the specified joint using Gram-Schmidt. The reference edge aligned with the x-axis
     is the vector from kv to k1. The y-axis is coplanar with the reference edge and the vector from kv to k2. The z-axis is orthogonal
@@ -284,12 +321,14 @@ def compute_all2all_distances(pred, edges = None, index_base = 1):
         
     if edges is not None:
         if index_base == 1:
-            edges -= 1
-        elif index_base != 0:
+            idx = edges - 1
+        elif index_base == 0:
+            idx = edges
+        else:
             raise ValueError
-        distances = np.zeros((pred.shape[0], len(edges)))
+        distances = np.zeros((pred.shape[0], len(idx)))
         
-        for i, edge in zip(range(edges.shape[0]), edges):
+        for i, edge in zip(range(edges.shape[0]), idx):
             distances[:, i] = compute_distance(pred[:, :, edge[0]], pred[:, :, edge[1]])
             
     else:
@@ -446,6 +485,4 @@ def gaussianfilterdata_derivative(pred, sigma = 1):
     
     g = -xx * np.exp(-.5 * xx**2 / sigma**2) / np.sqrt(np.pi*sigma**6)
     ddt = np.fft.fftshift(np.fft.ifft(np.fft.fft(pred[:-1]) * np.fft.fft(g)))
-    return ddt
-
-    
+    return ddt    
