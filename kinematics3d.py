@@ -1,6 +1,7 @@
 ## Helper functions for working with 3D kinematics
 import numpy as np
 import scipy.io
+from scipy.spatial.transform import Rotation as R
 
 ## Loading functions
 def load_COM(filepath):
@@ -50,7 +51,7 @@ def load_skeleton(filepath):
 
 def compute_joint_angle(pred, k1, kv, k2, degrees = True, index_base = 1):
     '''
-    Compute the angle between keypoints across time
+    Compute the 3 point angle between keypoints across time
     
     pred: DANNCE prediction data. Expected to be shape Tx1x3xK or Tx3xK
     k1: keypoint to use as first end point
@@ -89,22 +90,8 @@ def compute_joint_angle(pred, k1, kv, k2, degrees = True, index_base = 1):
         
     return angle
 
-def compute_rotation_matrix(k1, kv, k2):
-    '''
-    Compute rotation matrix for the point at kv relative to the vectors from kv
-    through k1 and k2. The local z-axis is the vector from kv to k2. The local x-
-    axis is the vector orthogonal to z and coplanar with z and the vector between
-    kv and k1. The local y-axis is the cross product of x and z.
-    
-    k1: T x 3 position vector. Assumed to be the position of the joint proximal to kv
-    kv: T x 3 position vector.
-    k2: T x 3 position vector. Assumed to be the position of the joint distal to kv
 
-    returns T x 3 x 3 tensor giving rotation matrix
-    '''
-    z = k2 - kv
-    x_ref = k1 - kv
-    
+def _compute_rotation_matrix(z, x_ref):
     z_mag = np.sqrt(z[:, 0]**2 + z[:, 1]**2 + z[:, 2]**2)
     x_ref_mag = np.sqrt(x_ref[:, 0]**2 + x_ref[:, 1]**2 + x_ref[:, 2]**2)
 
@@ -122,174 +109,218 @@ def compute_rotation_matrix(k1, kv, k2):
     z_norm = np.expand_dims(z_norm, axis = 2)
     y_norm = np.expand_dims(y_norm, axis = 2)
     x_norm = np.expand_dims(x_norm, axis = 2)
-    
+
     return np.concatenate((z_norm, y_norm, x_norm), axis = 2)
-
-
-def compute_orientation(pred, k1, kv, k2, index_base = 1):
-    '''
-    Compute orientation matrices across time for the specified joint using Gram-Schmidt. The reference edge aligned with the x-axis
-    is the vector from kv to k1. The y-axis is coplanar with the reference edge and the vector from kv to k2. The z-axis is orthogonal
-    to the local xy plane.
-
-    pred: DANNCE prediction data. Expected to be shape Tx1x3xK or Tx3xK
-    k1: keypoint to use as end point of vector aligned with x-axis
-    kv: keypoint to use as vertex point
-    k2: kepoint to use as end point of vector defining the xy plane
-    index_base: specifies whether joint indices are specified as indexed from 0 or 1. Only needed if angles_to_compute is given
-            as list of keypoint indices. Default: 1
-    returns orientation: a T x 9 array giving the flattened orientation matrix at each time point (C order)
-    '''
-    if len(pred.shape) > 3:
-        pred = np.squeeze(pred)
-
-    if index_base == 1:
-        k1 -= 1
-        kb -= 1
-        k2 -= 1
-    elif index_base != 0:
-        raise ValueError
-
-    ## Refactor so these calculations are only performed once if computing joint angles and orientations in one pass
-    v1 = pred[:,:,k1] - pred[:,:,kb]
-    v2 = pred[:,:,k2] - pred[:,:,kb]
-
-    v1mag = np.sqrt(v1[:,0]**2 + v1[:,1]**2 + v1[:,2]**2)
-    v2mag = np.sqrt(v2[:,0]**2 + v2[:,1]**2 + v2[:,2]**2)
     
-    x = v1 / np.column_stack((v1mag, v1mag, v1mag))
-    v2norm = v2 / np.column_stack((v2mag, v2mag, v2mag)) # is this operation necessary?
-
-    v3 = np.cross(x, v2norm)
-    v3mag = np.sqrt(v3[:,0]**2 + v3[:,1]**2 + v3[:,2]**2)
-    z = v3 / np.column_stack((v3mag, v3mag, v3mag)) # z-axis
-
-    y = np.cross(x, z) # y-axis
-    orientation = np.column_stack((x, y, z))
-    return orientation
-
-def compute_joint_angles(pred, edges, parsed_joint_names = None, angles_to_compute = 'all', mode = 'full', degrees = True, index_base = 1):
+def compute_rotation_matrix(k1, kv, k2):
     '''
-    TODO: Refactor this function so it's easier to understand. Probably want to dispatch 3 similar functions depending on mode.
-    Also, might want to add a mode that returns Euler angles instead of orientation matrix
-    Compute specified joint angles between keypoints across time and optionally compute orientations matrices. 
-    Iterates over each keypoint specified in "angles_to_compute" as the vertex and computes all possible angles and/or orientations
-    with pairs of connected nodes. Joint angles measure how open the joint is, while the orientation matrix captures its spatial alignment.
-
-    pred: DANNCE prediction data. Expected to be shape Tx1x3xK or Tx3xK
-    edges: an E x 2 numpy array containing the indices of each edge endpoint, where E is the total number of edges in the skeleton
-    parsed_joint_names: a python list with each index matching the corresponding joint name in the skeleton, or None.
-                        Only necessary to specify if passing joint names to angles_to_compute
-    angles_to_compute: a list of joint names whose angles will be computed, or 'all' for computing all joint angles
-    mode: a string specifying which calculations to perform. Default is 'full'. Options:
-                    - 'full': compute joint angles and orientation matrices
-                    - 'angles_only': compute only joint angles
-                    - 'orientations_only': compute only orientation matrices
-    degrees: boolean flag that returns angle in degrees if true and in radians if false 
-    index_base: specifies whether joint indices are specified as indexed from 0 or 1. Only needed if angles_to_compute is given
-                as list of keypoint indices. Default: 1
+    Compute rotation matrix for the point at kv relative to the vectors from kv
+    through k1 and k2. The local z-axis is the vector from kv to k2. The local x-
+    axis is the vector orthogonal to z and coplanar with z and the vector between
+    kv and k1. The local y-axis is the cross product of x and z.
     
-    If mode = 'full', returns angles: a T x M numpy array containing the angle at each specified joint for each time point, where 
-                                      M is the total number of computed joint angles
-                              orientations: a T x M x 9 numpy array containing the flattened orientation matrix (C style) 
-                                            at each joint for each time
-                              angle_points: a M x 3 numpy array containing the computed joint indices
-    If mode = 'angles_only', returns angles and angle_points
-    If mode = 'orientations_only', returns orientations and angle_points
+    k1: T x 3 position vector. Assumed to be the position of the joint proximal to kv
+    kv: T x 3 position vector.
+    k2: T x 3 position vector. Assumed to be the position of the joint distal to kv
+
+    returns T x 3 x 3 tensor giving rotation matrix
     '''
-    if len(pred.shape) > 3:
-        pred = np.squeeze(pred)
-        
-    if angles_to_compute == 'all':
-        joint_idx = range(pred.shape[2]) # 0-indexed
-                          
-    else:
-        # find all joints that match supplied names/idx, then compute those angles only
-        if isinstance(angles_to_compute[0], str):
-            try:
-                joint_idx = np.where(np.isin(joint_names, angles_to_compute))[0] # 0-indexed
-            except ValueError:
-                raise ValueError("Need to specify parsed_joint_names if passing joint names to angles_to_compute")
-                
-        elif isinstance(angles_to_compute[0], int):
-            if index_base == 1:
-                joint_idx = angles_to_compute - 1
-            elif index_base == 0:
-                joint_idx = angles_to_compute
-            else:
-                raise ValueError
+    z = k2 - kv
+    x_ref = k1 - kv
     
-    ## Set up output arrays
-    angle_points = np.zeros((0, 3))
-    if mode == 'full':
-        angles = np.zeros((pred.shape[0], 0)) # Difficult to compute how many total angles will be computed, so will grow numpy array from this
-        orientations = np.zeros((pred.shape[0], 0, 9))
-    elif mode == 'angles_only':
-        angles = np.zeros((pred.shape[0], 0)) # Difficult to compute how many total angles will be computed, so will grow numpy array from this
-    elif mode == 'orientations_only':
-        orientations = np.zeros((pred.shape[0], 0, 9))
-    else:
-        raise ValueError
+    return _compute_rotation_matrix(z, x_ref)
 
-            
-    for i, joint in zip(joint_idx, parsed_joint_names[joint_idx]): # TODO: add a verbose mode with tqdm and a silent mode
-        # Find all nodes connected to this joint
-        connected_nodes = np.where(edges == i + 1)[0]
-        n_angles_this_joint = len(connected_nodes) * (len(connected_nodes) - 1) / 2 # given a vertex, we want to compute the angle between
-                                                                                    # all pairs of connected nodes. This becomes a pairwise
-                                                                                    # comparison, which means n(n-1)/2 angles for n connected
-                                                                                    # nodes
-        if mode == 'full':
-            angles_this_joint = np.zeros((pred.shape[0], n_angles_this_joint))
-            orientations_this_joint = np.zeros((pred.shape[0], n_angles_this_joint, 3, 3))
-        elif mode == 'angles_only':
-            angles_this_joint = np.zeros((pred.shape[0], n_angles_this_joint))
-        elif mode == 'orientations_only':
-            orientations = np.zeros((pred.shape[0], 0, 9))
-        
-        points_this_joint = np.zeros((n_angles_this_joint, 3))    
-        # Iterate over each pair of connected nodes and compute joint angle. Will skip over joints with fewer than 2 connections
-        l = 0
-        for j in range(len(connected_nodes) - 1): # no need to consider the last connected node
-            for k in connected_nodes[j+1:]: # compute angle between j and all other nodes connected to i
-                if mode == 'full':
-                    angles_this_joint[:, l] = compute_joint_angle(pred, connected_nodes[j], i + 1, k, degrees = degrees) # could probably refactor to just pass the relevant keypoints. Might be faster
-                    orientations_this_joint[:, l] = compute_orientation(pred, connected_nodes[j], i + 1, k)
-                elif mode == 'angles_only':
-                    angles_this_joint[:, l] = compute_joint_angle(pred, connected_nodes[j], i + 1, k, degrees = degrees)
-                elif mode == 'orientations_only':
-                    orientations_this_joint[:, l] = compute_orientation(pred, connected_nodes[j], i + 1, k)
-                    
-                points_this_joint[l, :] = [connected_nodes[j], i + 1, k]
-                l += 1
-        angle_points = np.concatenate((angle_points, points_this_joint), axis = 0)
-        if mode == 'full':
-            angles = np.concatenate((angles, angles_this_joint), axis = 1)
-            orientations = np.concatenate((orientations, orientations_this_joint), axis = 1)
-            return angles, orientations, angle_points
-        elif mode == 'angles_only':
-            angles = np.concatenate((angles, angles_this_joint), axis = 1)
-            return angles, angle_points
-        elif mode == 'orientations_only':
-            orientations = np.concatenate((orientations, orientations_this_joint), axis = 1)
-            return orientations, angle_points
-        
-
-def compute_euler_angles(orientations, degrees = True):
+def compute_rotation_matrix2(ref1, ref2, kv, k2):
+    '''For two edges that don't share a keypoint. Useful for shoulder.
+       kv: vertex joint
+       k2: distal joint
+       ref1: origin of reference vector
+       ref2: endpoint of reference vector
     '''
-    Compute Euler angles (xyz convention) given orientation matrices. This is the pitch,
-    roll, and yaw. 
+    z = k2 - kv
+    x_ref = ref2 - ref1
+    x_ref_at_kv = kv + x_ref
+    
+    return _compute_rotation_matrix(z, x_ref_at_kv)
 
-    orientations: T x M x 9 or T x M x 3 x 3
+
+def compute_euler_angles(rot, degrees = True):
+    '''
+    Compute Euler angles (xyz convention) given rotation matrices. This is the pitch,
+    roll, and yaw (i.e. the abduction, rotation, and flexion)
+
+    orientations: T x M x 3 x 3
     degrees: returns answer in degrees if True, radians if False
 
-    Returns: euler_angles, T x M x 3 giving pitch, roll, and yaw
+    Returns: angles, T x M x 3 giving rotation, flexion, and abduction
     '''
+    # Reshape (T, M, 3, 3) → (T*M, 3, 3)
+    T = rot.shape[0]
+    M = rot.shape[1]
+    R_matrices_flat = rot.reshape(-1, 3, 3)
+    
+    # Create batched Rotation object
+    R_obj = R.from_matrix(R_matrices_flat)
+    
+    # Decompose using desired order (e.g., 'zyx')
+    angles = R_obj.as_euler('ZYX', degrees = degrees)  # shape: (T*M, 3)
+    
+    # Reshape back to (T, M, 3)
+    angles = angles.reshape(T, M, 3)
+    
+    return angles
 
-    if len(orientations.shape) > 3:
-        orientations = np.reshape(orientations -1, 3, 3)
 
-    raise NotImplementedError
+# def compute_orientation(pred, k1, kv, k2, index_base = 1):
+#     '''
+#     Compute orientation matrices across time for the specified joint using Gram-Schmidt. The reference edge aligned with the x-axis
+#     is the vector from kv to k1. The y-axis is coplanar with the reference edge and the vector from kv to k2. The z-axis is orthogonal
+#     to the local xy plane.
+
+#     pred: DANNCE prediction data. Expected to be shape Tx1x3xK or Tx3xK
+#     k1: keypoint to use as end point of vector aligned with x-axis
+#     kv: keypoint to use as vertex point
+#     k2: kepoint to use as end point of vector defining the xy plane
+#     index_base: specifies whether joint indices are specified as indexed from 0 or 1. Only needed if angles_to_compute is given
+#             as list of keypoint indices. Default: 1
+#     returns orientation: a T x 9 array giving the flattened orientation matrix at each time point (C order)
+#     '''
+#     if len(pred.shape) > 3:
+#         pred = np.squeeze(pred)
+
+#     if index_base == 1:
+#         k1 -= 1
+#         kb -= 1
+#         k2 -= 1
+#     elif index_base != 0:
+#         raise ValueError
+
+#     ## Refactor so these calculations are only performed once if computing joint angles and orientations in one pass
+#     v1 = pred[:,:,k1] - pred[:,:,kb]
+#     v2 = pred[:,:,k2] - pred[:,:,kb]
+
+#     v1mag = np.sqrt(v1[:,0]**2 + v1[:,1]**2 + v1[:,2]**2)
+#     v2mag = np.sqrt(v2[:,0]**2 + v2[:,1]**2 + v2[:,2]**2)
+    
+#     x = v1 / np.column_stack((v1mag, v1mag, v1mag))
+#     v2norm = v2 / np.column_stack((v2mag, v2mag, v2mag)) # is this operation necessary?
+
+#     v3 = np.cross(x, v2norm)
+#     v3mag = np.sqrt(v3[:,0]**2 + v3[:,1]**2 + v3[:,2]**2)
+#     z = v3 / np.column_stack((v3mag, v3mag, v3mag)) # z-axis
+
+#     y = np.cross(x, z) # y-axis
+#     orientation = np.column_stack((x, y, z))
+#     return orientation
+
+# def compute_joint_angles(pred, edges, parsed_joint_names = None, angles_to_compute = 'all', mode = 'full', degrees = True, index_base = 1):
+#     '''
+#     TODO: Refactor this function so it's easier to understand. Probably want to dispatch 3 similar functions depending on mode.
+#     Also, might want to add a mode that returns Euler angles instead of orientation matrix
+#     Compute specified joint angles between keypoints across time and optionally compute orientations matrices. 
+#     Iterates over each keypoint specified in "angles_to_compute" as the vertex and computes all possible angles and/or orientations
+#     with pairs of connected nodes. Joint angles measure how open the joint is, while the orientation matrix captures its spatial alignment.
+
+#     pred: DANNCE prediction data. Expected to be shape Tx1x3xK or Tx3xK
+#     edges: an E x 2 numpy array containing the indices of each edge endpoint, where E is the total number of edges in the skeleton
+#     parsed_joint_names: a python list with each index matching the corresponding joint name in the skeleton, or None.
+#                         Only necessary to specify if passing joint names to angles_to_compute
+#     angles_to_compute: a list of joint names whose angles will be computed, or 'all' for computing all joint angles
+#     mode: a string specifying which calculations to perform. Default is 'full'. Options:
+#                     - 'full': compute joint angles and orientation matrices
+#                     - 'angles_only': compute only joint angles
+#                     - 'orientations_only': compute only orientation matrices
+#     degrees: boolean flag that returns angle in degrees if true and in radians if false 
+#     index_base: specifies whether joint indices are specified as indexed from 0 or 1. Only needed if angles_to_compute is given
+#                 as list of keypoint indices. Default: 1
+    
+#     If mode = 'full', returns angles: a T x M numpy array containing the angle at each specified joint for each time point, where 
+#                                       M is the total number of computed joint angles
+#                               orientations: a T x M x 9 numpy array containing the flattened orientation matrix (C style) 
+#                                             at each joint for each time
+#                               angle_points: a M x 3 numpy array containing the computed joint indices
+#     If mode = 'angles_only', returns angles and angle_points
+#     If mode = 'orientations_only', returns orientations and angle_points
+#     '''
+#     if len(pred.shape) > 3:
+#         pred = np.squeeze(pred)
+        
+#     if angles_to_compute == 'all':
+#         joint_idx = range(pred.shape[2]) # 0-indexed
+                          
+#     else:
+#         # find all joints that match supplied names/idx, then compute those angles only
+#         if isinstance(angles_to_compute[0], str):
+#             try:
+#                 joint_idx = np.where(np.isin(joint_names, angles_to_compute))[0] # 0-indexed
+#             except ValueError:
+#                 raise ValueError("Need to specify parsed_joint_names if passing joint names to angles_to_compute")
+                
+#         elif isinstance(angles_to_compute[0], int):
+#             if index_base == 1:
+#                 joint_idx = angles_to_compute - 1
+#             elif index_base == 0:
+#                 joint_idx = angles_to_compute
+#             else:
+#                 raise ValueError
+    
+#     ## Set up output arrays
+#     angle_points = np.zeros((0, 3))
+#     if mode == 'full':
+#         angles = np.zeros((pred.shape[0], 0)) # Difficult to compute how many total angles will be computed, so will grow numpy array from this
+#         orientations = np.zeros((pred.shape[0], 0, 9))
+#     elif mode == 'angles_only':
+#         angles = np.zeros((pred.shape[0], 0)) # Difficult to compute how many total angles will be computed, so will grow numpy array from this
+#     elif mode == 'orientations_only':
+#         orientations = np.zeros((pred.shape[0], 0, 9))
+#     else:
+#         raise ValueError
+
+            
+#     for i, joint in zip(joint_idx, parsed_joint_names[joint_idx]): # TODO: add a verbose mode with tqdm and a silent mode
+#         # Find all nodes connected to this joint
+#         connected_nodes = np.where(edges == i + 1)[0]
+#         n_angles_this_joint = len(connected_nodes) * (len(connected_nodes) - 1) / 2 # given a vertex, we want to compute the angle between
+#                                                                                     # all pairs of connected nodes. This becomes a pairwise
+#                                                                                     # comparison, which means n(n-1)/2 angles for n connected
+#                                                                                     # nodes
+#         if mode == 'full':
+#             angles_this_joint = np.zeros((pred.shape[0], n_angles_this_joint))
+#             orientations_this_joint = np.zeros((pred.shape[0], n_angles_this_joint, 3, 3))
+#         elif mode == 'angles_only':
+#             angles_this_joint = np.zeros((pred.shape[0], n_angles_this_joint))
+#         elif mode == 'orientations_only':
+#             orientations = np.zeros((pred.shape[0], 0, 9))
+        
+#         points_this_joint = np.zeros((n_angles_this_joint, 3))    
+#         # Iterate over each pair of connected nodes and compute joint angle. Will skip over joints with fewer than 2 connections
+#         l = 0
+#         for j in range(len(connected_nodes) - 1): # no need to consider the last connected node
+#             for k in connected_nodes[j+1:]: # compute angle between j and all other nodes connected to i
+#                 if mode == 'full':
+#                     angles_this_joint[:, l] = compute_joint_angle(pred, connected_nodes[j], i + 1, k, degrees = degrees) # could probably refactor to just pass the relevant keypoints. Might be faster
+#                     orientations_this_joint[:, l] = compute_orientation(pred, connected_nodes[j], i + 1, k)
+#                 elif mode == 'angles_only':
+#                     angles_this_joint[:, l] = compute_joint_angle(pred, connected_nodes[j], i + 1, k, degrees = degrees)
+#                 elif mode == 'orientations_only':
+#                     orientations_this_joint[:, l] = compute_orientation(pred, connected_nodes[j], i + 1, k)
+                    
+#                 points_this_joint[l, :] = [connected_nodes[j], i + 1, k]
+#                 l += 1
+#         angle_points = np.concatenate((angle_points, points_this_joint), axis = 0)
+#         if mode == 'full':
+#             angles = np.concatenate((angles, angles_this_joint), axis = 1)
+#             orientations = np.concatenate((orientations, orientations_this_joint), axis = 1)
+#             return angles, orientations, angle_points
+#         elif mode == 'angles_only':
+#             angles = np.concatenate((angles, angles_this_joint), axis = 1)
+#             return angles, angle_points
+#         elif mode == 'orientations_only':
+#             orientations = np.concatenate((orientations, orientations_this_joint), axis = 1)
+#             return orientations, angle_points
+        
+
+
 
 ## Distance functions
 def compute_distance(a, b):
