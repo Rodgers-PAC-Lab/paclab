@@ -363,9 +363,9 @@ class QueuePopper(object):
                 # Append to left side
                 for deq_data in self.deq_data_l:
                     deq_data.append(data)
-                    
-                    # Count
-                    self.n_packets_read += 1
+                
+                # Count
+                self.n_packets_read += 1
             
             
             ## If we didn't get any data, sleep for a bit
