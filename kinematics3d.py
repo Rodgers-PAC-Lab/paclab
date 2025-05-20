@@ -67,13 +67,13 @@ def compute_joint_angle(pred, k1, kv, k2, degrees = True, index_base = 1):
 
     if index_base == 1:
         k1 -= 1
-        kb -= 1
+        kv -= 1
         k2 -= 1
     elif index_base != 0:
         raise ValueError
     
-    v1 = pred[:,:,k1] - pred[:,:,kb]
-    v2 = pred[:,:,k2] - pred[:,:,kb]
+    v1 = pred[:,:,k1] - pred[:,:,kv]
+    v2 = pred[:,:,k2] - pred[:,:,kv]
     
     v1mag = np.sqrt(v1[:,0]**2 + v1[:,1]**2 + v1[:,2]**2)
     v2mag = np.sqrt(v2[:,0]**2 + v2[:,1]**2 + v2[:,2]**2)
@@ -86,7 +86,7 @@ def compute_joint_angle(pred, k1, kv, k2, degrees = True, index_base = 1):
     angle = np.arccos(dot)
     
     if degrees:
-        angle *= (180/np.pi)
+        angle = np.degrees(angle)
         
     return angle
 
@@ -110,7 +110,13 @@ def _compute_rotation_matrix(z, x_ref):
     y_norm = np.expand_dims(y_norm, axis = 2)
     x_norm = np.expand_dims(x_norm, axis = 2)
 
-    return np.concatenate((z_norm, y_norm, x_norm), axis = 2)
+    if np.any(z_mag < 1):
+        print("Warning: bone is very small!")
+    if np.any(y_mag < 1e-1):
+        print("Warning: bones are likely colinear!")
+    if np.any(x_ref_mag < 1):
+        print("Warning: reference bone is very small!")
+    return np.concatenate((x_norm, y_norm, z_norm), axis = 2)
     
 def compute_rotation_matrix(k1, kv, k2):
     '''
@@ -144,7 +150,7 @@ def compute_rotation_matrix2(ref1, ref2, kv, k2):
     return _compute_rotation_matrix(z, x_ref_at_kv)
 
 
-def compute_euler_angles(rot, degrees = True):
+def compute_euler_angles(rot, degrees = True, order = 'zyx'):
     '''
     Compute Euler angles (xyz convention) given rotation matrices. This is the pitch,
     roll, and yaw (i.e. the abduction, rotation, and flexion)
@@ -154,6 +160,7 @@ def compute_euler_angles(rot, degrees = True):
 
     Returns: angles, T x M x 3 giving rotation, flexion, and abduction
     '''
+    
     # Reshape (T, M, 3, 3) → (T*M, 3, 3)
     T = rot.shape[0]
     M = rot.shape[1]
@@ -163,7 +170,7 @@ def compute_euler_angles(rot, degrees = True):
     R_obj = R.from_matrix(R_matrices_flat)
     
     # Decompose using desired order (e.g., 'zyx')
-    angles = R_obj.as_euler('ZYX', degrees = degrees)  # shape: (T*M, 3)
+    angles = R_obj.as_euler(order, degrees = degrees)  # shape: (T*M, 3)
     
     # Reshape back to (T, M, 3)
     angles = angles.reshape(T, M, 3)
