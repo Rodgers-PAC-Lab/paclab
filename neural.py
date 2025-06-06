@@ -185,6 +185,11 @@ def load_metadata_from_xml(neural_root, logger, session_name):
         so it is checked and dropped.
     """
     
+    ## Remove .bin if it exists
+    if session_name.endswith('.bin'):
+        session_name = session_name[:-4]
+    
+    
     ## Find the corresponding xml file
     # Get date string from session name
     date_string = session_name[4:24]
