@@ -2,6 +2,7 @@
 import numpy as np
 import scipy.io
 from scipy.spatial.transform import Rotation as R
+import pandas
 
 ## Loading functions
 def load_COM(filepath):
@@ -49,8 +50,9 @@ def load_skeleton(filepath):
 
 ## Angle functions
 
-def compute_joint_angle(pred, k1, kv, k2, degrees = True, index_base = 1):
+def __compute_joint_angle(pred, k1, kv, k2, degrees = True, index_base = 1):
     '''
+    OLD- do not use
     Compute the 3 point angle between keypoints across time
     
     pred: DANNCE prediction data. Expected to be shape Tx1x3xK or Tx3xK
@@ -120,6 +122,7 @@ def _compute_rotation_matrix(z, x_ref):
     
 def compute_rotation_matrix(k1, kv, k2):
     '''
+    OLD- do not use
     Compute rotation matrix for the point at kv relative to the vectors from kv
     through k1 and k2. The local z-axis is the vector from kv to k2. The local x-
     axis is the vector orthogonal to z and coplanar with z and the vector between
@@ -137,7 +140,9 @@ def compute_rotation_matrix(k1, kv, k2):
     return _compute_rotation_matrix(z, x_ref)
 
 def compute_rotation_matrix2(ref1, ref2, kv, k2):
-    '''For two edges that don't share a keypoint. Useful for shoulder.
+    '''
+        OLD- do not use
+        For two edges that don't share a keypoint. Useful for shoulder.
        kv: vertex joint
        k2: distal joint
        ref1: origin of reference vector
@@ -152,6 +157,7 @@ def compute_rotation_matrix2(ref1, ref2, kv, k2):
 
 def compute_euler_angles(rot, degrees = True, order = 'zyx'):
     '''
+    OLD- do not use
     Compute Euler angles (xyz convention) given rotation matrices. This is the pitch,
     roll, and yaw (i.e. the abduction, rotation, and flexion)
 
@@ -327,7 +333,108 @@ def compute_euler_angles(rot, degrees = True, order = 'zyx'):
 #             return orientations, angle_points
         
 
+## Chris' joint angle functions from 20250605_3d
+def cart2sphere(x, y, z):
+    """Convert cartesian to spherical (length, azim, elev)
+    
+    Azimuth of zero is parallel to x
+    Elevation of zero is parallel to z
+    
+    See figure 5.7.10 here:
+    https://math.libretexts.org/Courses/Mount_Royal_University/Calculus_for_Scientists_II/7%3A_Vector_Spaces/5.7%3A_Cylindrical_and_Spherical_Coordinates
+    """
+    length = np.sqrt(x ** 2 + y ** 2 + z ** 2)
+    azim = np.arctan2(y, x)
+    elev = np.arccos(z / length)
+    assert (azim > -np.pi).all()
+    assert (azim < np.pi).all()
+    return length, azim, elev
 
+def sphere2cart(length, azim, elev):
+    """Convert spherical (length, azim, elev) to cartesian"""
+    z = length * np.cos(elev)
+    
+    # Distance in the XY plane
+    r = length * np.sin(elev)
+    x = r * np.cos(azim)
+    y = r * np.sin(azim)
+
+    return x, y, z
+
+def joint_angle(x1, x2, x3=None):
+    """Compute the joint angle
+    
+    This is defined as the difference in the azimuth and the difference
+    in the elevation between the two limbs (x1, x2) and (x2, x3).
+    If (x1, x2) and (x2, x3) are collinear, then the joint_angle is (0, 0)
+    
+    Note that this is not at all the same as the azimuth and elevation 
+    of the difference of the two limbs! That would be (x1, x3). 
+    For intuition, think about the joint angle of the elbow. When the arm
+    is straight, this joint angle will be zero, no matter which way the arm
+    is pointing.
+    
+    The "compound angle" is also computed, which is the scalar angle
+    between the two vectors (arccos of the dot product of the normed vectors)
+    
+    The input can be provided as points or as limb vectors.
+    If points:
+        x1, x2, x3 == p1, p2, p3: the three points (eg, shoulder, elbow, wrist)
+        
+    If vectors:
+        x1, x2 == v1, v2: the vector from p1 to p2, and from p2 to p3
+        In this case, x3 should be set to None
+    
+    In either case, each argument must be a DataFrame with columns 
+    ['x', 'y', 'z'].
+    
+    Returns: DataFrame
+        index: same as index on input
+        columns: azim, el, compound
+    """
+    ## Turn input into limb vectors
+    if x3 is None:
+        # the limb vectors were provided
+        v1 = x1
+        v2 = x2
+        
+    else:
+        # the joint positions were provided
+        # calculate limb vectors
+        v1 = x2 - x1
+        v2 = x3 - x2
+    
+    
+    ## Compute angle
+    # Convert each limb to spherical coordinates
+    sphere1 = pandas.concat(
+        cart2sphere(v1['x'], v1['y'], v1['z']), 
+        axis=1, keys=['length', 'azim', 'elev'])
+    sphere2 = pandas.concat(
+        cart2sphere(v2['x'], v2['y'], v2['z']), 
+        axis=1, keys=['length', 'azim', 'elev'])
+    
+    # Diff the two limbs (dropping the irrelevant 'length')
+    res = sphere2[['azim', 'elev']] - sphere1[['azim', 'elev']]
+    
+    # Pin to the correct range
+    res = np.mod(res + np.pi, 2 * np.pi) - np.pi
+    
+    
+    ## Also compute the compound angle
+    # There may be some identity to compute this from azim and elev
+    # https://www.reddit.com/r/askmath/comments/xgqw53/whats_the_formula_to_get_compound_angle_from/
+    # But easier to do it in cartesian space
+    
+    # Normalize
+    v1norm = v1.divide(sphere1['length'], axis=0)
+    v2norm = v2.divide(sphere2['length'], axis=0)
+    
+    # Arccos of the dot product
+    res['compound'] = np.arccos((v1norm * v2norm).sum(axis=1))
+
+    ## Return
+    return res
 
 ## Distance functions
 def compute_distance(a, b):
