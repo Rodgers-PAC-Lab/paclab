@@ -146,8 +146,8 @@ class OscilloscopeWidget(PyQt5.QtWidgets.QWidget):
         # Parameters that cannot be set by user interaction
         self.abr_highpass_freq = 300
         self.abr_lowpass_freq = 3000
-        self.heartbeat_highpass_freq = 50
-        self.heartbeat_lowpass_freq = 3000
+        self.heartbeat_highpass_freq = 20
+        self.heartbeat_lowpass_freq = 1000
         self.ekg_recent_duration_window_s = 30
         self.duration_data_to_analyze_s = duration_data_to_analyze_s
         self.audio_extract_win_samples = audio_extract_win_samples
