@@ -48,6 +48,29 @@ def load_skeleton(filepath):
 
     return parsed_joint_names, edges
 
+def frame2samp_id(frames):
+    '''
+    Convert video frame number to DANNCE sample ID value
+    frames: Tx1, 1xT, or T, numpy array containing frame number
+    
+    returns sampleID, the DANNCE-generated sample ID value
+    '''
+    frames = np.squeeze(frames)
+    sampleID = 20 * frames + 1
+    return sampleID
+    
+def samp_id2frame(sampleID):
+    '''
+    Convert DANNCE sample ID value to video frame number
+    sampleID: Tx1, 1xT or T, numpy array containing DANNCE-generated sample ID
+    
+    returns frames, the corresponding video frame numbers
+    '''
+    sampleID = np.squeeze(sampleID)
+    frames = (sampleID - 1) // 20
+    
+    return frames
+    
 ## Angle functions
 
 def __compute_joint_angle(pred, k1, kv, k2, degrees = True, index_base = 1):
