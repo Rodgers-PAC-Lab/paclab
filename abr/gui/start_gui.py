@@ -2,7 +2,7 @@
 
 import sys
 import signal
-from . import graphics
+from . import main_window
 import PyQt5.QtWidgets
 
 # Apparently QApplication needs sys.argv for some reason
@@ -14,7 +14,7 @@ app = PyQt5.QtWidgets.QApplication(sys.argv)
 signal.signal(signal.SIGINT, signal.SIG_DFL)
 
 # Instantiate a MainWindow
-win = graphics.MainWindow()
+win = main_window.MainWindow()
 
 # Show it
 win.show()

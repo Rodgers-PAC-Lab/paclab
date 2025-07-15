@@ -1,54 +1,48 @@
 """Objects to run an ABR session
 
-No GUI code here!
+This module contains no GUI code. Everything should also run in a CLI.
+
+The only defined class is ABR_Device, which can run a recording session.
+In CLI mode, directly instantiate ABR_Device.
+In GUI mode, the MainWindow instantiates and owns it.
 """
 
-import collections
-import threading
+import multiprocessing
 import time
 import datetime
 import os
-import json
-import serial
-from . import serial_comm
-import numpy as np
-import paclab.abr
+from . import serial_io
+from . import file_io
 
 class ABR_Device(object):
+    """Runs an ABR session
+    
+    Attributes
+    ---
+    serial_reader : serial_io.SerialReader  
+        Reads the data
+    file_writer : file_io.FileWriter
+        Writes the data
+    """
     def __init__(self, 
         verbose=True, 
         serial_port='/dev/ttyACM0', 
-        serial_baudrate=115200, 
         serial_timeout=0.1,
         abr_data_path='/home/mouse/mnt/cuttlefish/surgery/abr_data',
-        data_in_memory_duration_s=60,
         experimenter='mouse',
         ):
         """Initialize a new ABR_Device object to collect ABR data.
         
+        Arguments
+        ---
         verbose : bool
             If True, write more debugging information
-        
         serial_port : str
             Path to serial port
-        
-        serial_baudrate : numeric
-            Baudrate to use
-            I suspect this is ignored. The actual data transfer rate is
-            16KHz * 8ch * 4B = 512KB/s, well over this baudrate.
-        
         serial_timeout : numeric
             Time to wait for a message from the serial port before returning
-        
         abr_data_path : str
             Path to root directory to store data in
-        
-        data_in_memory_duration_s : numeric
-            No data will be removed from the deque in memory and written to
-            disk until the length of the deque exceeds this amount. This is
-            also the maximum amount of data that can be analyzed by the GUI.
-            Increasing this value gives a more accurate representation of the
-            ABR, but it will slow GUI updates, and delay writing to disk. 
         """
         ## Store parameters
         # Currently not supported to change the sampling rate or gains
@@ -60,7 +54,6 @@ class ABR_Device(object):
         
         # Parameters to send to serial port
         self.serial_port = serial_port
-        self.serial_baudrate = serial_baudrate
         self.serial_timeout = serial_timeout
         
         # Where to save data
@@ -68,22 +61,31 @@ class ABR_Device(object):
         self.experimenter = experimenter
         self.session_dir = None # until set
         
-        # How much data to keep in memory
-        self.data_in_memory_duration_s = data_in_memory_duration_s
-        
         
         ## Instance variables
         # These are None until set
-        self.ser = None
-        self.tsr = None
-        self.tfw = None
+        self.serial_reader = None
+        self.file_writer = None
+        self.queue_popper = None
+        
+        # Keep track of whether we're running
+        self.running = False
     
     def run_session(self):
-        self.start_session()
+        """Called in CLI mode to run a session
+        
+        Calls self.start(), waits until CTRL+C, calls self.stop()
+        """
+        self.start()
         
         try:
             while True:
                 time.sleep(.1)
+                
+                #~ if datetime.datetime.now() > (
+                    #~ dt_start + datetime.timedelta(seconds=6)):
+                    #~ print('reached 6 second shutdown')
+                    #~ break
         
         except KeyboardInterrupt:
             print('received CTRL+C, shutting down')
@@ -175,587 +177,147 @@ class ABR_Device(object):
         
         return session_number, session_dir
         
-    def start_session(self, replay_filename=None):
-        print('starting abr session...')
-        print(f'replay filename is {replay_filename}')        
+    def start(self, replay_filename=None):
+        """Start an ABR session
         
-
-        ## Store the datetime str for the current session
+        Arguments
+        ---
+        replay_filename : path
+            If this is not None, replay data from this path instead of
+            reading from serial port.
+        """
+        
+        ## Log
+        print('starting abr session...')
+        if self.verbose:
+            print(f'replay filename is {replay_filename}')        
+    
+        # Store the datetime str for the current session
         self.session_dt_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-
-
-        ## Define a session_name and create the session_directory
-        # Only create the output directory if this is a live session
+        
+        # Keep track of whether we're running
+        self.running = True
+    
+       
+        ## Depends on if we're in live mode
         if replay_filename is None:
+            
+            ## Define a session_name and create the session_directory
             self.session_number, self.session_dir = (
                 self.determine_session_directory())
             
-            print(f'creating output directory {self.session_dir}')
+            if self.verbose:
+                print(f'creating output directory {self.session_dir}')
             os.mkdir(self.session_dir)
-        
-        
-        ## These steps only occur if we're in live mode
-        if replay_filename is None:
-            ## Open a serial connection to the teensy
-            self.ser = serial.Serial(
-                port=self.serial_port,
-                baudrate=self.serial_baudrate,
-                timeout=self.serial_timeout,
+            
+            
+            ## Create the serial_reader object
+            self.serial_reader = serial_io.SerialReader(
+                serial_port=self.serial_port,
+                serial_timeout=self.serial_timeout,
+                gains=self.gains,
+                sampling_rate=self.sampling_rate,
+                verbose=self.verbose,
+                session_dir=self.session_dir,
+                session_dt_str=self.session_dt_str,
                 )
             
             
-            ## Close out the previous session
-            print('flushing serial port')
-            
-            # Flush
-            self.ser.flushInput()
-            self.ser.flush()
-            
-            # Stop data acquisition if it's already happening
-            serial_comm.write_stop(
-                self.ser, warn_if_not_running=False, warn_if_running=True)
+            ## Start acquistion in a separate Process
+            self.proc = multiprocessing.Process(target=self.serial_reader.start)
+            if self.verbose:
+                print('starting process')
+            self.proc.start()
             
             
-            ## Query the serial port
-            # Just a consistency check because the answer should always be the same
-            query_res = serial_comm.write_query(self.ser)
-
-
-            ## Set parameters
-            # Form the command
-            # TODO: document these other parameters
-            str_gains = ','.join([str(gain) for gain in self.gains])
-            cmd_str = f'U,8,{self.sampling_rate},0,{str_gains};'
-            
-            # Log
-            print(f'setting parameters: {cmd_str}')
-            
-            # Log the configs that were used
-            to_json = query_res['message']
-            
-            # Store configs from this object
-            to_json['gains'] = self.gains
-            to_json['sampling_rate'] = self.sampling_rate
-            to_json['session_start_time'] = self.session_dt_str
-            
-            # Mistakenly, this was int64 in early versions of this software
-            # There is currently no support for changing the output_dtype
-            # This makes the output_dtype explicit, and also works as a flag
-            # for when this fix went into effect
-            to_json['output_dtype'] = 'int32'
-            
-            # Write the config file
-            with open(os.path.join(self.session_dir, 'config.json'), 'w') as fi:
-                json.dump(to_json, fi)
-                
-            # Send the command
-            serial_comm.write_setupU(self.ser, cmd_str)
-
-
-            ## Tell it to start
-            print('starting acquisition...')
-            serial_comm.write_start(self.ser)
-
-            
-            ## Start acquiring
-            self.tsr = ThreadedSerialReader(self.ser, verbose=False)
-            self.tsr.start()
-
-
-            ## Start the TFW
-            # This parameter determines how much data is kept in memory before
-            # writing to disk
-            # We want to make sure at least that many chunks are kept in the deque
-            # before writing out
-            minimum_deq_length = int(np.rint(
-                self.data_in_memory_duration_s * self.sampling_rate / 500))
-            
-            # Create tfw
-            self.tfw = ThreadedFileWriter(
-                self.tsr.deq_data, 
-                self.tsr.deq_headers,
-                verbose=False,
-                output_filename=os.path.join(self.session_dir, 'data.bin'),
-                output_header_filename=os.path.join(self.session_dir, 'packet_headers.csv'),
-                minimum_deq_length=minimum_deq_length,
+            ## Create QueuePopper to pop data into deques
+            # Continuously read data out of the mp queues and into 
+            # thread-safe deques
+            self.queue_popper = serial_io.QueuePopper(
+                q_data=self.serial_reader.q_data,
+                q_headers=self.serial_reader.q_header,
+                verbose=self.verbose,
                 )
-            self.tfw.start()
+            
+            # Get the default output deqs, which are for gui
+            self.deq_header = self.queue_popper.deq_header
+            self.deq_data = self.queue_popper.deq_data
+            
+            # Get outputs for threaded file writer
+            # (Must do this before starting queue popper)
+            fw_deq_header, fw_deq_data = self.queue_popper.get_output_deqs()
+            
+            # Start the queue popper
+            self.queue_popper.start()
+            
+            
+            ## Continuously write data from the tfw_deqs to disk
+            output_filename = os.path.join(
+                self.session_dir, 'data.bin')
+            output_header_filename = os.path.join(
+                self.session_dir, 'packet_headers.csv')
+            
+            # Create file_writer
+            self.file_writer = file_io.FileWriter(
+                deq_data=fw_deq_data,
+                deq_header=fw_deq_header,
+                output_filename=output_filename,
+                output_header_filename=output_header_filename,
+                )
+            
+            # Start writing
+            self.file_writer.start()
         
         else:
-            ## This is the canned mode
-            # In this case the deque will never be emptied
-            # TODO: initialize a dummy ThreadedFileWriter to do nothing
-            # but empty the deque
-            self.tsr = ThreadedFileReader(replay_filename)
-            self.tsr.start()
-
-
-            ## Start the TFW
-            # This parameter determines how much data is kept in memory before
-            # writing to disk
-            # We want to make sure at least that many chunks are kept in the deque
-            # before writing out
-            minimum_deq_length = int(np.rint(
-                self.data_in_memory_duration_s * self.sampling_rate / 500))
-            
-            # Create tfw
-            self.tfw = ThreadedFileWriter(
-                self.tsr.deq_data, 
-                self.tsr.deq_headers,
-                verbose=False,
-                output_filename=None,
-                output_header_filename=None,
-                minimum_deq_length=minimum_deq_length,
-                )
-            self.tfw.start()            
-
-    def stop_session(self):
-        print('stopping abr session...')
-        # Tell the thread to stop reading - it will keep reading until the 
-        # serial buffer is empty though
-        # I think because of the `join`, this will block until the serial
-        # buffer is empty
-        if self.tsr is not None:
-            self.tsr.stop()
-        
-        # Wait for the file writer finish - this just empties the deq, and
-        # is insensitive to serial traffic
-        if self.tfw is not None:
-            self.tfw.stop()
-        
-        # These steps can only be taken if the serial port was created, which
-        # doesn't happen for errors that occur on startup
-        if self.ser is not None:
-            # Tell the device to stop producing data
-            serial_comm.write_stop(self.ser)
-        
-            # Close serial port
-            self.ser.close()
-        else:
-            print('error: cannot close serial port because it was never created')
-        
-        print("abr device closed")
-
-class ThreadedFileWriter(object):
-    def __init__(self, 
-        deq_data, deq_headers, output_filename, output_header_filename,
-        minimum_deq_length=1000, verbose=False):
-        """Initialize a new ThreadedFileWriter
-
-        Pops data from the left side of deq_data and writes to disk.
-
-        deq_data : deque 
-            Data filled by and shared with ThreadedSerialReader
-            These are the chunks of data, with time along the rows
-        
-        deq_headers : deque 
-            Data filled by and shared with ThreadedSerialReader
-            These are the headers for each chunk of data, one row per chunk
-
-        output_filename : str or None
-            Where to write out data
-            if None, nothing is written to disk
-        
-        output_header_filename : str or None
-            Where to write out headers
-            if None, nothing is written to disk
-
-        minimum_deq_length : int
-            If len(deq) < minimum_deq_length, no data will be popped or written
-            This ensure there is always recent data to visualize
-        """
-        # Store
-        self.output_filename = output_filename
-        self.output_header_filename = output_header_filename
-        self.minimum_deq_length = minimum_deq_length
-        self.deq_data = deq_data
-        self.deq_headers = deq_headers
-        self.keep_writing = True
-        self.thread = None
-        self.verbose = verbose
-        self.n_chunks_written = 0
-        
-        # Set to null by default
-        if self.output_filename is None:
-            self.output_filename = os.devnull
-        
-        if self.output_header_filename is None:
-            self.output_header_filename = os.devnull
-        
-        #~ # Keep track of big_data here
-        #~ self.big_data_last_col = 0
-        #~ self.big_data = None
-        #~ self.headers_l = []
-        
-        # This will be set by the first header that's received
-        self.header_colnames = None
-        
-        # Erase the file
-        with open(self.output_filename, 'wb') as output_file:
+            # Implement replay mode here
             pass
         
-        # Write the headers
-        with open(self.output_header_filename, 'w') as headers_out:
-            pass
-
-    def write_to_disk(self, drain=False):
-        # Don't write if the deq is too short, unless drain is True
-        if drain:
-            threshold = 0
-        else:
-            threshold = self.minimum_deq_length
-        
-        # Empty 
-        with (
-                open(self.output_filename, 'ab') as data_out, 
-                open(self.output_header_filename, 'a') as headers_out
-                ):
-            while len(self.deq_data) > threshold:
-                ## Pop
-                # Pop the oldest data
-                data_chunk = self.deq_data.popleft()
-                
-                # Pop the oldest header
-                data_header = self.deq_headers.popleft()
-            
-            
-                ## Set up the header row of headers_out if first time
-                if self.header_colnames is None:
-                    self.header_colnames = sorted(data_header.keys())
-                
-                    # Write the header
-                    str_to_write = ','.join(self.header_colnames)
-                    headers_out.write(str_to_write + '\n')            
-                
-                
-                ## Append raw data to output file
-                # Note: just maintains dtype of whatever data_chunk is
-                data_out.write(data_chunk)
-                
-                # Append header
-                str_to_write = ','.join(
-                    [str(data_header[colname]) for colname in self.header_colnames])
-                headers_out.write(str_to_write + '\n')
-                
-
-                #~ ## Append to big data
-                #~ if self.big_data is None:
-                    #~ # Special case, it doesn't exist yet
-                    #~ # This is also how we find out how many columns it has
-                    #~ self.big_data = data_chunk.copy()
-                    #~ self.big_data_last_col = len(data_chunk)
-                
-                #~ else:
-                    #~ # The normal case, self.big_data does exist
-                    #~ # This is how long it will be
-                    #~ self.new_big_data_last_col = (
-                        #~ self.big_data_last_col + len(data_chunk))
-
-                    #~ # Grow if needed
-                    #~ if self.new_big_data_last_col > len(self.big_data):
-                        #~ # Make it twice as big as needed
-                        #~ new_len = 2 * self.new_big_data_last_col
-                        
-                        #~ # Fill it with zeros
-                        #~ self.new_big_data = np.zeros(
-                            #~ (new_len, self.big_data.shape[1]))
-                        
-                        #~ # Copy in the old data
-                        #~ self.new_big_data[:self.big_data_last_col] = (
-                            #~ self.big_data[:self.big_data_last_col])
-                        
-                        #~ # Rename
-                        #~ self.big_data = self.new_big_data
-                    
-                    #~ # Add the new data at the end
-                    #~ self.big_data[
-                        #~ self.big_data_last_col:self.new_big_data_last_col] = (
-                        #~ data_chunk)
-
-                    #~ # Update the pointer
-                    #~ self.big_data_last_col = self.new_big_data_last_col
-
-                #~ # Store read headers
-                #~ self.headers_l.append(data_header)
-
-                
-                ## Keep track of how many chunks written
-                self.n_chunks_written += 1
-        
         if self.verbose:
-            print(f"popped and wrote {self.n_chunks_written} chunks")
+            print('done with ABR_device.start')
 
-    def write_out(self):
-        """Target of the thread
-        
-        As long as self.keep_reading is True, infinitely keep reading
-        chunks of data and appending to the deq as they come in.
-        Keep track of any late reads.
-        
-        Once self.keep_reading is False, read any last chunks, 
-        and then return.
-        """
-        # Continue as long as self.keep_writing
-        while self.keep_writing:
-            self.write_to_disk()
-            
-            # This sleeps keeps us from writing too frequently, which is 
-            # probably somewhat expensive
-            # But it increases the latency before draining
-            time.sleep(.3)
-        
-        # self.keep_reading has been set False
-        # Read any last chunks
-        self.write_to_disk(drain=True)
-    
-    def start(self):
-        """Start the capture of data"""
-        self.thread = threading.Thread(target=self.write_out)
-        self.thread.start()
-    
     def stop(self):
-        """Stop capturing data and join the thread"""
-        self.keep_writing = False
+        """Stop experiment
         
-        if self.thread is not None:
-            self.thread.join()
-
-class ThreadedFileReader(object):
-    """Instantiates a thread to constantly read from a previous file
-    
-    This is for debugging, so we can load data stored by Bill's code (not
-    the same format as our code!) and see what it would look like.
-    
-    self.deq : collections.deque
-        Data will be appended to the right side as it comes in
-        The oldest data will be on the left
-
-    self.thread : the thread that reads
-    """
-    def __init__(self, filename, verbose=False):
-        """Instatiate a new ThreadedFileReader
+        Stops serial_reader
+        Stops queue_popper
         
-        filename : full path to a *.bin written by BG code
         
         """
-        self.deq_headers = collections.deque()
-        self.deq_data = collections.deque()
-        self.filename = filename
-        self.keep_reading = True
-        self.late_reads = 0
-        self.n_packets_read = 0
-        self.thread = None
-        self.verbose = verbose
-        
-        
-        ## Read the entire file
-        # Read the data
-        with open(filename, "rb") as fi:
-            data_bytes = fi.read()
-
-        # We need to parse the first header separately because it has data that
-        # we need to parse the rest of the packets.
-        first_header_bytes = data_bytes[:60]
-        self.first_header_info = paclab.abr.labview_loading.parse_header(
-            first_header_bytes)
-
-        # Make it match expected format
-        self.first_header_info['header_size'] = 0
-        self.first_header_info['header_nbytes'] = 0
-        self.first_header_info['data_format_enum'] = 0
-        self.first_header_info['data_format'] = 0
-        self.first_header_info['total_packets'] = 0
-        self.first_header_info['data_class'] = 0
-        self.first_header_info['n_samples'] = 0
-
-        # Parse the entire file
-        self.data = paclab.abr.labview_loading.parse_data(
-            data_bytes,
-            self.first_header_info['number_channels'],
-            self.first_header_info['number_samples'])
-        
-        # Invert the processing done by BG to restore it to bytes
-        # It's stored in V
-        # Re-apply the gain applied by ADS1299
-        self.data = self.data * np.array([24, 1, 24, 1, 1, 1, 1, 1])
-        
-        # Convert from V to bits (full-scale range is 9V)
-        self.data = self.data * 2 ** 24 / 9
-        
-        # Convert to bytes in C-order (needed for writing)
-        self.data = self.data.astype(np.int32, order='C')
-       
-        
-        ## Get the start time and parcel out data accordingly
-        self.start_time = datetime.datetime.now()
-    
-    def read_and_append(self):
-        # Wait until it's been long enough
-        inter_packet_interval_s = 500 / 16000
-        release_time = self.start_time + datetime.timedelta(
-            seconds=inter_packet_interval_s * self.n_packets_read)
-        
-        while datetime.datetime.now() < release_time:
-            time.sleep(inter_packet_interval_s / 3)
-        
-        # Get the packet
-        payload = self.data[
-            self.n_packets_read * 500:(self.n_packets_read + 1) * 500,
-            :]
-        
-        # Append to the left side of the deque
-        header = self.first_header_info.copy()
-        header['packet_num'] = self.n_packets_read
-        self.deq_headers.append(header)
-        self.deq_data.append(payload)
-        
-        # Log
-        self.n_packets_read += 1
-
-    def capture(self):
-        """Target of the thread
-        
-        As long as self.keep_reading is True, infinitely keep reading
-        chunks of data and appending to the deq as they come in.
-        Keep track of any late reads.
-        
-        Once self.keep_reading is False, read any last chunks, 
-        and then return.
-        """
-        # Continue as long as self.keep_reading
-        while self.keep_reading:
-            if self.verbose:
-                print(f'deqlen: {len(self.deq_data)}')
-            self.read_and_append()
-    
-    def start(self):
-        """Start the capture of data"""
-        self.thread = threading.Thread(target=self.capture)
-        self.thread.start()
-    
-    def stop(self):
-        """Stop capturing data and join the thread"""
-        self.keep_reading = False
-        
-        if self.thread is not None:
-            self.thread.join()
-
-class ThreadedSerialReader(object):
-    """Instantiates a thread to constantly read from serial into a deque
-    
-    self.ser : serial.Serial, provided by user
-
-    self.deq : collections.deque
-        Data will be appended to the right side as it comes in
-        The oldest data will be on the left
-
-    self.late_reads : int
-        The number of times that more than one packet of data was
-        available. This should ideally never happen, because the buffer
-        overflows around 65000 bytes or so, which is just a few packets
-    
-    self.thread : the thread that reads
-    """
-    def __init__(self, ser, verbose=False):
-        """Instatiate a new ThreadedSerialReader
-        
-        ser : serial.Serial
-            Data will be read from this object and stored in self.deq
-        """
-        self.deq_headers = collections.deque()
-        self.deq_data = collections.deque()
-        self.ser = ser
-        self.keep_reading = True
-        self.late_reads = 0
-        self.n_packets_read = 0
-        self.thread = None
-        self.verbose = verbose
-    
-    def read_and_append(self):
-        # Read a data packet
-        # Relatively long wait_time here, in hopes that if something is
-        # screwed up we can find sync bytes and get back on track
-        data_packet = serial_comm.read_and_classify_packet(
-            self.ser, wait_time=0.5, assert_packet_type='data')
-        
-        # If any data remains, this was a late read
-        in_waiting = self.ser.in_waiting
-        if in_waiting > 0:
-            print(f'late read! {in_waiting} bytes in waiting')
-            self.late_reads += 1  
-            data_packet['message']['late_read'] = True
-            data_packet['message']['in_waiting'] = in_waiting
-        else:
-            data_packet['message']['late_read'] = False
-            data_packet['message']['in_waiting'] = in_waiting
-            
-        # Store the time
         if self.verbose:
-            print(f"read packet {data_packet['message']['packet_num']}")
-    
-        # Append to the left side of the deque
-        self.deq_headers.append(data_packet['message'])
-        self.deq_data.append(data_packet['payload'])
+            print('ABR_device stopping abr session...')
         
-        # Log
-        self.n_packets_read += 1
+        # Tell the serial_reader to stop reading
+        if self.verbose:
+            print('setting stop event')
+        self.serial_reader.stop_event.set()
         
-        # When the buffer fills, what seems to happen is that the next packet
-        # is fine, then the following packet starts out fine but ends corrupted,
-        # then the following packet starts out corrupted, then we get back
-        # on track. So probably the buffer can hold >1 but <2 packets, and
-        # when the second packet is read, the end of it is some random chunk
-        # of another packet.
-        # The buffer might be 20132 (16018 + 4114). 
-        # After the first packet is read, the second packet is only 4114 long, 
-        # then it reads 11904 from the next packet to arrive, then the last
-        # 4114 of that packet are dropped.
+        # Wait for it to complete
+        # Might take a little while because it has to send the stop message, etc
+        time.sleep(1)
+        
+        # Tell the queue_popper to stop
+        # This joins, so it blocks until it finishes
+        if self.verbose:
+            print('stopping queue_popper')
+        self.queue_popper.stop()
+        
+        # Join on the serial_reader (this will hang until all data is read out)
+        if self.verbose:
+            print('joining')
+        self.proc.join(timeout=1)
+        
+        # If it didn't finish (most likely because data is left in the queues
+        # for some reason) then kill it
+        if self.proc.is_alive():
+            print('warning: could not join serial_reader process; killing')
+            self.proc.terminate()
 
-        #~ # Debug: intentionally break
-        #~ if self.n_packets_read == 10:
-            #~ time.sleep(.5)
-
-    def capture(self):
-        """Target of the thread
+        # Tell the writer to stop
+        # This joins, so it blocks until it finishes
+        self.file_writer.stop()
         
-        As long as self.keep_reading is True, infinitely keep reading
-        chunks of data and appending to the deq as they come in.
-        Keep track of any late reads.
+        # Keep track of whether we're running
+        self.running = False
         
-        Once self.keep_reading is False, read any last chunks, 
-        and then return.
-        """
-        # Continue as long as self.keep_reading
-        while self.keep_reading:
-            if self.verbose:
-                print(f'deqlen: {len(self.deq_data)}')
-            self.read_and_append()
-            
-            #~ if self.n_packets_read == 10:
-                #~ print('simulating pause')
-                #~ # It seems like after this pause we get the next two packets, then a
-                #~ # gap, then packets continue. But never a partial packet.
-                #~ # Perhaps two packets fills the buffer, and after that all messages are
-                #~ # simply dropped silently until there is space again.
-                #~ time.sleep(1)
-        
-        # self.keep_reading has been set False
-        # Read any last chunks
-        while self.ser.in_waiting > 0:
-            # Probably should only do this once, because if it's more than
-            # one, something has gone wrong 
-            self.read_and_append()
-    
-    def start(self):
-        """Start the capture of data"""
-        self.thread = threading.Thread(target=self.capture)
-        self.thread.start()
-    
-    def stop(self):
-        """Stop capturing data and join the thread"""
-        self.keep_reading = False
-        
-        if self.thread is not None:
-            self.thread.join()
-
+        print('ABR_Device shutdown complete')    
 

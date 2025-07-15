@@ -66,36 +66,54 @@ def read_and_classify_packet(
     
     
     ## Deal with various edge cases relating to sync byte
-    # Handle too few sync_bytes - this is most likely to happen if no data
-    # was sent at all. In this case, error or return None
-    if len(sync_bytes) < 4:
+    # Depends on how many sync bytes
+    if len(sync_bytes) == 0:
+        # No sync bytes
+        # This might be normal if an empty_message is expected, otherwise
+        # it's an error
         error_msg = (
             f'{start_time} sync error: incomplete sync message received: '
             f'{sync_bytes.hex()}')
+        
+        if error_on_empty_message:
+            raise ValueError(error_msg)
+        else:
+            # This is the only case where a warning is not warranted
+            return None
+    
+    elif len(sync_bytes) < 4:
+        # 1-3 sync bytes - this should never happen
+        # In this case, error or return None, since the following bytes won't
+        # make sense
+        error_msg = (
+            f'{start_time} sync error: incomplete sync message received: '
+            f'{sync_bytes.hex()}')
+
         if error_on_empty_message:
             raise ValueError(error_msg)
         else:
             print(error_msg)
             return None
 
-    # Handle too many bytes received, and none of them sync bytes
-    # In this case, error or return None, since the following bytes won't
-    # make sense
-    if sync_bytes[-4:] != b'\xAA\x55\x5A\xA5':
+    elif sync_bytes[-4:] != b'\xAA\x55\x5A\xA5':
+        # Handle too many bytes received, and none of them sync bytes
+        # In this case, error or return None, since the following bytes won't
+        # make sense
         error_msg = (            
             f'{start_time} sync error: no sync bytes found out of '
             f'{len(sync_bytes)} total: {sync_bytes.hex()}')
+        
         if error_on_empty_message:
             raise ValueError(error_msg)
         else:
             print(error_msg)
             return None
     
-    # Handle sync_bytes found, but only after extraneous bytes
-    # In this case, warn about the dropped data and continue
-    # This case, and the "good" case where exactly 4 correct sync bytes were
-    # received, are the only cases where the code continues
-    if len(sync_bytes) > 4:
+    elif len(sync_bytes) > 4:
+        # Handle sync_bytes found, but only after extraneous bytes
+        # In this case, warn about the dropped data and continue
+        # This case, and the "good" case where exactly 4 correct sync bytes were
+        # received, are the only cases where the code continues
         n_dropped_bytes = len(sync_bytes) - 4
         print(
             f'{start_time} warning: extra data found before sync bytes, '

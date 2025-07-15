@@ -8,14 +8,16 @@
 
 import numpy as np
 import pandas
-from . import ABR_Device
+import paclab.abr.gui
 import paclab
+import time
 import os
+import multiprocessing
 
 # Initalize abr_device
-abr_device = ABR_Device.ABR_Device()
+abr_device = paclab.abr.gui.ABR_Device.ABR_Device()
 
-# Run
+# Run (it will stop on CTRL+C)
 abr_device.run_session()
 
 # Load data
