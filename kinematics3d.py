@@ -643,7 +643,7 @@ def gaussianfilterdata_derivative(pred, sigma = 1):
     Compute smoothed velocities by convolving position with the derivative of a Gaussian.
     Adapted from old matlab code written by Gordon.
 
-    pred: DANNCE prediction data. Expected to be shape Tx1x3xK or Tx3xK
+    pred: angle data
     sigma: the standard deviation of the Gaussian derivative kernel. According to Gordon, this 
            approximately maps on to window size / 2 for a sliding window
 
@@ -652,5 +652,11 @@ def gaussianfilterdata_derivative(pred, sigma = 1):
     xx = (np.arange(1, L) - np.round(L/2)).T
     
     g = -xx * np.exp(-.5 * xx**2 / sigma**2) / np.sqrt(np.pi*sigma**6)
-    ddt = np.fft.fftshift(np.fft.ifft(np.fft.fft(pred[:-1]) * np.fft.fft(g)))
+    ddt = np.zeros_like(pred)
+    for i in range(pred.shape[1]):       # over x/y/z
+            ddt[:, i] = np.fft.fftshift(
+                np.fft.ifft(
+                    np.fft.fft(pred[:, i]) * np.fft.fft(g, n=L)
+                ).real
+            )
     return ddt    
