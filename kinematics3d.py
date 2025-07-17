@@ -3,8 +3,10 @@ import numpy as np
 import scipy.io
 from scipy.spatial.transform import Rotation as R
 import pandas
+import pickle
+import ffmpeg
 
-## Loading functions
+## Loading + misc helperfunctions
 def load_COM(filepath):
     '''
     Load 3D center of mass predictions from a COM predictions file or com3d_used file.
@@ -70,7 +72,122 @@ def samp_id2frame(sampleID):
     frames = (sampleID - 1) // 20
     
     return frames
+
+def extract_samples_by_exp(path_to_sample_pkl):
+    '''
+    Extract list of sampleIDs for each frame in a sample pickle file aggregated
+    in lists by experiment ID (in order of label3d_file in io.yaml exp block.
     
+    path_to_sample_pkl: path pointing to a training or validation sample pickle
+    returns an aggregated pandas dataframe groupby with the sampleIDs in lists
+    '''
+    f = open(path_to_sample_pkl, 'rb')
+    data = pickle.load(f)
+    df =  pandas.DataFrame(np.int64(np.array(list(np.char.split(data, '_')))), columns = ['exp', 'sample'])
+    return df.groupby('exp')['sample'].agg(list)    
+
+def parse_exp(path_to_yaml, mode = 'dannce'):
+    '''
+    Parse io.yaml file exp block to recover session filepaths
+    path_to_yaml: string filepath to io.yaml file
+    mode: if 'com', grab the paths in the com_exp block
+          if 'dannce', grab the paths in the exp block (default dannce)
+          
+    returns exp, a list of string filepaths to session dannce.mat files, and
+            com_files, a list of string filepaths to session com file ('dannce'
+            mode only)
+    '''
+    f = open(path_to_yaml, 'r')
+    exp = []
+    if mode == "com":
+        # Iterate until com_exp block
+        while True:
+            line = f.readline()
+            if not line:
+                raise EOFError
+            elif 'com_exp' in line:
+                break
+
+        
+        # Iterate over all lines in com_exp block and append paths to exp
+        while True:
+            line = f.readline()
+            if not line:
+                raise EOFError
+                
+            elif '- label3d_file: ' in line:
+                line = line.strip()
+                line = line.split()
+                if '../' in line[-1]:
+                    # Convert relative path to absolute. TODO: make this more robust
+                    exp.append(os.path.join(os.path.dirname(path_to_yaml), line[-1].strip("'").strip('"')))
+                else:
+                    exp.append(line[-1].strip("'").strip('"'))
+            
+            elif len(line.strip()) > 0:
+                return exp
+            
+        
+    elif mode == 'dannce':
+        com_files = []
+        # Iterate until exp block
+        while True:
+            line = f.readline()
+            if not line:
+                raise EOFError
+                
+            elif 'exp:' == line.strip():
+                break
+        
+        # Iterate over all lines in exp block
+        while True:
+            line = f.readline()
+            if not line:
+                return exp, com_files
+            
+            elif "- label3d_file: " in line:
+                line = line.strip()
+                line = line.split()
+                if '../' in line[-1]:
+                    # Convert relative path to absolute. TODO: make this more robust
+                    exp.append(os.path.join(os.path.dirname(path_to_yaml), line[-1].strip("'").strip('"')))
+                else:
+                    exp.append(line[-1].strip("'").strip('"'))
+            elif "com_file: " in line:
+                line = line.strip()
+                line = line.split()
+                if '../' in line[-1]:
+                    # Convert relative path to absolute. TODO: make this more robust
+                    com_files.append(os.path.join(os.path.dirname(path_to_yaml), line[-1].strip("'").strip('"')))
+                else:
+                    com_files.append(line[-1].strip("'").strip('"'))
+    else:
+        raise ValueError
+
+def extract_selected_frames(input_video_path, output_video_path, frame_list):
+    '''
+    Write a video with select frames from an input video.
+    
+    input_file_path: string path to input video
+    output_file_path: string path to new video file that will be written
+    frame_list: a list of frame numbers from the input video to write
+                to the output video (0-indexed)
+    '''
+    ## AI generated
+    # FFmpeg select filter expression
+    select_expr = '+'.join([f'eq(n,{f})' for f in sorted(frame_list)])
+
+    stream = (
+        ffmpeg
+        .input(input_video_path)
+        .filter_('select', select_expr)
+        .filter_('setpts', 'N/FRAME_RATE/TB')  # Reset timestamps to avoid stretching
+        .output(output_video_path, vcodec='libx264',r = 50, vsync='0')
+    )
+
+    ffmpeg.run(stream)
+
+
 ## Angle functions
 
 def __compute_joint_angle(pred, k1, kv, k2, degrees = True, index_base = 1):
@@ -471,6 +588,37 @@ def compute_distance(a, b):
     '''
     distance = np.sqrt((a[:, 0] - b[:, 0])**2 + (a[:, 1] - b[:, 1])**2 + (a[:, 2] - b[:, 2])**2)
     return distance
+
+
+def nanmean_infmean(loss, axis=None):
+    """
+    Adapted from sdannce.dannce.engine.models.metrics.py
+    Safe mean that handles nans and infinities.
+    """
+    mask = (~np.isnan(loss)) & (~np.isposinf(loss)) & (~np.isneginf(loss))
+    valid_count = np.sum(mask, axis=axis)
+    
+    if np.any(valid_count == 0):
+        return 0  # or np.nan, depending on your desired behavior
+
+    valid_sum = np.sum(np.where(mask, loss, 0), axis=axis)
+    return valid_sum / valid_count
+
+def euclidean_distance_3D(predicted, target, axis = 0):
+    """
+    Adapted from sdannce.dannce.engine.models.metrics.py
+    Mean per-joint position error (i.e. mean Euclidean distance),
+    often referred to as "Protocol #1" in many papers.
+    
+    axis = 0 averages within keypoints across frames
+    axis = 1 averages within frames across keypoints
+    """
+    assert predicted.shape == target.shape
+    assert predicted.shape[1] in [2, 3]
+
+    mpjpe = np.linalg.norm((target - predicted), ord=2, axis=1)
+
+    return nanmean_infmean(mpjpe, axis)    
 
 def compute_all2all_distances(pred, edges = None, index_base = 1):
     '''
