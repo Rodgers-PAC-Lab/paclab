@@ -2,8 +2,11 @@
 import numpy as np
 import scipy.io
 from scipy.spatial.transform import Rotation as R
+import pandas
+import pickle
+import ffmpeg
 
-## Loading functions
+## Loading + misc helperfunctions
 def load_COM(filepath):
     '''
     Load 3D center of mass predictions from a COM predictions file or com3d_used file.
@@ -47,10 +50,149 @@ def load_skeleton(filepath):
 
     return parsed_joint_names, edges
 
+def frame2samp_id(frames):
+    '''
+    Convert video frame number to DANNCE sample ID value
+    frames: Tx1, 1xT, or T, numpy array containing frame number
+    
+    returns sampleID, the DANNCE-generated sample ID value
+    '''
+    frames = np.squeeze(frames)
+    sampleID = 20 * frames + 1
+    return sampleID
+    
+def samp_id2frame(sampleID):
+    '''
+    Convert DANNCE sample ID value to video frame number
+    sampleID: Tx1, 1xT or T, numpy array containing DANNCE-generated sample ID
+    
+    returns frames, the corresponding video frame numbers
+    '''
+    sampleID = np.squeeze(sampleID)
+    frames = (sampleID - 1) // 20
+    
+    return frames
+
+def extract_samples_by_exp(path_to_sample_pkl):
+    '''
+    Extract list of sampleIDs for each frame in a sample pickle file aggregated
+    in lists by experiment ID (in order of label3d_file in io.yaml exp block.
+    
+    path_to_sample_pkl: path pointing to a training or validation sample pickle
+    returns an aggregated pandas dataframe groupby with the sampleIDs in lists
+    '''
+    f = open(path_to_sample_pkl, 'rb')
+    data = pickle.load(f)
+    df =  pandas.DataFrame(np.int64(np.array(list(np.char.split(data, '_')))), columns = ['exp', 'sample'])
+    return df.groupby('exp')['sample'].agg(list)    
+
+def parse_exp(path_to_yaml, mode = 'dannce'):
+    '''
+    Parse io.yaml file exp block to recover session filepaths
+    path_to_yaml: string filepath to io.yaml file
+    mode: if 'com', grab the paths in the com_exp block
+          if 'dannce', grab the paths in the exp block (default dannce)
+          
+    returns exp, a list of string filepaths to session dannce.mat files, and
+            com_files, a list of string filepaths to session com file ('dannce'
+            mode only)
+    '''
+    f = open(path_to_yaml, 'r')
+    exp = []
+    if mode == "com":
+        # Iterate until com_exp block
+        while True:
+            line = f.readline()
+            if not line:
+                raise EOFError
+            elif 'com_exp' in line:
+                break
+
+        
+        # Iterate over all lines in com_exp block and append paths to exp
+        while True:
+            line = f.readline()
+            if not line:
+                raise EOFError
+                
+            elif '- label3d_file: ' in line:
+                line = line.strip()
+                line = line.split()
+                if '../' in line[-1]:
+                    # Convert relative path to absolute. TODO: make this more robust
+                    exp.append(os.path.join(os.path.dirname(path_to_yaml), line[-1].strip("'").strip('"')))
+                else:
+                    exp.append(line[-1].strip("'").strip('"'))
+            
+            elif len(line.strip()) > 0:
+                return exp
+            
+        
+    elif mode == 'dannce':
+        com_files = []
+        # Iterate until exp block
+        while True:
+            line = f.readline()
+            if not line:
+                raise EOFError
+                
+            elif 'exp:' == line.strip():
+                break
+        
+        # Iterate over all lines in exp block
+        while True:
+            line = f.readline()
+            if not line:
+                return exp, com_files
+            
+            elif "- label3d_file: " in line:
+                line = line.strip()
+                line = line.split()
+                if '../' in line[-1]:
+                    # Convert relative path to absolute. TODO: make this more robust
+                    exp.append(os.path.join(os.path.dirname(path_to_yaml), line[-1].strip("'").strip('"')))
+                else:
+                    exp.append(line[-1].strip("'").strip('"'))
+            elif "com_file: " in line:
+                line = line.strip()
+                line = line.split()
+                if '../' in line[-1]:
+                    # Convert relative path to absolute. TODO: make this more robust
+                    com_files.append(os.path.join(os.path.dirname(path_to_yaml), line[-1].strip("'").strip('"')))
+                else:
+                    com_files.append(line[-1].strip("'").strip('"'))
+    else:
+        raise ValueError
+
+def extract_selected_frames(input_video_path, output_video_path, frame_list):
+    '''
+    Write a video with select frames from an input video.
+    
+    input_file_path: string path to input video
+    output_file_path: string path to new video file that will be written
+    frame_list: a list of frame numbers from the input video to write
+                to the output video (0-indexed)
+    '''
+    ## AI generated
+    # FFmpeg select filter expression
+    select_expr = '+'.join([f'eq(n,{f})' for f in sorted(frame_list)])
+
+    stream = (
+        ffmpeg
+        .input(input_video_path)
+        .filter_('select', select_expr)
+        .filter_('setpts', 'N/FRAME_RATE/TB')  # Reset timestamps to avoid stretching
+        .output(output_video_path, vcodec='libx264',r = 50, vsync='0')
+    )
+
+    ffmpeg.run(stream)
+
+
 ## Angle functions
 
-def compute_joint_angle(pred, k1, kv, k2, degrees = True, index_base = 1):
+def __compute_joint_angle(pred, k1, kv, k2, degrees = True, index_base = 1):
     '''
+    OLD- do not use
     Compute the 3 point angle between keypoints across time
     
     pred: DANNCE prediction data. Expected to be shape Tx1x3xK or Tx3xK
@@ -120,6 +262,7 @@ def _compute_rotation_matrix(z, x_ref):
     
 def compute_rotation_matrix(k1, kv, k2):
     '''
+    OLD- do not use
     Compute rotation matrix for the point at kv relative to the vectors from kv
     through k1 and k2. The local z-axis is the vector from kv to k2. The local x-
     axis is the vector orthogonal to z and coplanar with z and the vector between
@@ -137,7 +280,9 @@ def compute_rotation_matrix(k1, kv, k2):
     return _compute_rotation_matrix(z, x_ref)
 
 def compute_rotation_matrix2(ref1, ref2, kv, k2):
-    '''For two edges that don't share a keypoint. Useful for shoulder.
+    '''
+        OLD- do not use
+        For two edges that don't share a keypoint. Useful for shoulder.
        kv: vertex joint
        k2: distal joint
        ref1: origin of reference vector
@@ -152,6 +297,7 @@ def compute_rotation_matrix2(ref1, ref2, kv, k2):
 
 def compute_euler_angles(rot, degrees = True, order = 'zyx'):
     '''
+    OLD- do not use
     Compute Euler angles (xyz convention) given rotation matrices. This is the pitch,
     roll, and yaw (i.e. the abduction, rotation, and flexion)
 
@@ -327,7 +473,108 @@ def compute_euler_angles(rot, degrees = True, order = 'zyx'):
 #             return orientations, angle_points
         
 
+## Chris' joint angle functions from 20250605_3d
+def cart2sphere(x, y, z):
+    """Convert cartesian to spherical (length, azim, elev)
+    
+    Azimuth of zero is parallel to x
+    Elevation of zero is parallel to z
+    
+    See figure 5.7.10 here:
+    https://math.libretexts.org/Courses/Mount_Royal_University/Calculus_for_Scientists_II/7%3A_Vector_Spaces/5.7%3A_Cylindrical_and_Spherical_Coordinates
+    """
+    length = np.sqrt(x ** 2 + y ** 2 + z ** 2)
+    azim = np.arctan2(y, x)
+    elev = np.arccos(z / length)
+    assert (azim > -np.pi).all()
+    assert (azim < np.pi).all()
+    return length, azim, elev
 
+def sphere2cart(length, azim, elev):
+    """Convert spherical (length, azim, elev) to cartesian"""
+    z = length * np.cos(elev)
+    
+    # Distance in the XY plane
+    r = length * np.sin(elev)
+    x = r * np.cos(azim)
+    y = r * np.sin(azim)
+
+    return x, y, z
+
+def joint_angle(x1, x2, x3=None):
+    """Compute the joint angle
+    
+    This is defined as the difference in the azimuth and the difference
+    in the elevation between the two limbs (x1, x2) and (x2, x3).
+    If (x1, x2) and (x2, x3) are collinear, then the joint_angle is (0, 0)
+    
+    Note that this is not at all the same as the azimuth and elevation 
+    of the difference of the two limbs! That would be (x1, x3). 
+    For intuition, think about the joint angle of the elbow. When the arm
+    is straight, this joint angle will be zero, no matter which way the arm
+    is pointing.
+    
+    The "compound angle" is also computed, which is the scalar angle
+    between the two vectors (arccos of the dot product of the normed vectors)
+    
+    The input can be provided as points or as limb vectors.
+    If points:
+        x1, x2, x3 == p1, p2, p3: the three points (eg, shoulder, elbow, wrist)
+        
+    If vectors:
+        x1, x2 == v1, v2: the vector from p1 to p2, and from p2 to p3
+        In this case, x3 should be set to None
+    
+    In either case, each argument must be a DataFrame with columns 
+    ['x', 'y', 'z'].
+    
+    Returns: DataFrame
+        index: same as index on input
+        columns: azim, el, compound
+    """
+    ## Turn input into limb vectors
+    if x3 is None:
+        # the limb vectors were provided
+        v1 = x1
+        v2 = x2
+        
+    else:
+        # the joint positions were provided
+        # calculate limb vectors
+        v1 = x2 - x1
+        v2 = x3 - x2
+    
+    
+    ## Compute angle
+    # Convert each limb to spherical coordinates
+    sphere1 = pandas.concat(
+        cart2sphere(v1['x'], v1['y'], v1['z']), 
+        axis=1, keys=['length', 'azim', 'elev'])
+    sphere2 = pandas.concat(
+        cart2sphere(v2['x'], v2['y'], v2['z']), 
+        axis=1, keys=['length', 'azim', 'elev'])
+    
+    # Diff the two limbs (dropping the irrelevant 'length')
+    res = sphere2[['azim', 'elev']] - sphere1[['azim', 'elev']]
+    
+    # Pin to the correct range
+    res = np.mod(res + np.pi, 2 * np.pi) - np.pi
+    
+    
+    ## Also compute the compound angle
+    # There may be some identity to compute this from azim and elev
+    # https://www.reddit.com/r/askmath/comments/xgqw53/whats_the_formula_to_get_compound_angle_from/
+    # But easier to do it in cartesian space
+    
+    # Normalize
+    v1norm = v1.divide(sphere1['length'], axis=0)
+    v2norm = v2.divide(sphere2['length'], axis=0)
+    
+    # Arccos of the dot product
+    res['compound'] = np.arccos((v1norm * v2norm).sum(axis=1))
+
+    ## Return
+    return res
 
 ## Distance functions
 def compute_distance(a, b):
@@ -341,6 +588,37 @@ def compute_distance(a, b):
     '''
     distance = np.sqrt((a[:, 0] - b[:, 0])**2 + (a[:, 1] - b[:, 1])**2 + (a[:, 2] - b[:, 2])**2)
     return distance
+
+
+def nanmean_infmean(loss, axis=None):
+    """
+    Adapted from sdannce.dannce.engine.models.metrics.py
+    Safe mean that handles nans and infinities.
+    """
+    mask = (~np.isnan(loss)) & (~np.isposinf(loss)) & (~np.isneginf(loss))
+    valid_count = np.sum(mask, axis=axis)
+    
+    if np.any(valid_count == 0):
+        return 0  # or np.nan, depending on your desired behavior
+
+    valid_sum = np.sum(np.where(mask, loss, 0), axis=axis)
+    return valid_sum / valid_count
+
+def euclidean_distance_3D(predicted, target, axis = 0):
+    """
+    Adapted from sdannce.dannce.engine.models.metrics.py
+    Mean per-joint position error (i.e. mean Euclidean distance),
+    often referred to as "Protocol #1" in many papers.
+    
+    axis = 0 averages within keypoints across frames
+    axis = 1 averages within frames across keypoints
+    """
+    assert predicted.shape == target.shape
+    assert predicted.shape[1] in [2, 3]
+
+    mpjpe = np.linalg.norm((target - predicted), ord=2, axis=1)
+
+    return nanmean_infmean(mpjpe, axis)    
 
 def compute_all2all_distances(pred, edges = None, index_base = 1):
     '''
@@ -513,7 +791,7 @@ def gaussianfilterdata_derivative(pred, sigma = 1):
     Compute smoothed velocities by convolving position with the derivative of a Gaussian.
     Adapted from old matlab code written by Gordon.
 
-    pred: DANNCE prediction data. Expected to be shape Tx1x3xK or Tx3xK
+    pred: angle data
     sigma: the standard deviation of the Gaussian derivative kernel. According to Gordon, this 
            approximately maps on to window size / 2 for a sliding window
 
@@ -522,5 +800,11 @@ def gaussianfilterdata_derivative(pred, sigma = 1):
     xx = (np.arange(1, L) - np.round(L/2)).T
     
     g = -xx * np.exp(-.5 * xx**2 / sigma**2) / np.sqrt(np.pi*sigma**6)
-    ddt = np.fft.fftshift(np.fft.ifft(np.fft.fft(pred[:-1]) * np.fft.fft(g)))
+    ddt = np.zeros_like(pred)
+    for i in range(pred.shape[1]):       # over x/y/z
+            ddt[:, i] = np.fft.fftshift(
+                np.fft.ifft(
+                    np.fft.fft(pred[:, i]) * np.fft.fft(g, n=L)
+                ).real
+            )
     return ddt    
