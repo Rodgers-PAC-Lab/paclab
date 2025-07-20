@@ -63,37 +63,59 @@ def find_logger(neural_root, session_name):
     
 def convert_dataflow_to_channel_map(dataflow):
     """Convert a dataflow to a channel_map dict suitable for kilosort.
+
+    The output file is now called a "probe dictionary".
+    https://kilosort.readthedocs.io/en/latest/tutorials/make_probe.html
     
+    Arguments
+    ---
     dataflow : DataFrame
         Must have columns: xcoord, ycoord, kcoord
+        If you do NOT want channels to be used for sorting, they should
+        be DROPPED from this `dataflow`, and they should also be DROPPED
+        from the binary file provided to kilosort.
+
+    By convention, we always order `reordered_channels.bin` to be in a
+    meaningful order, and in the same order as `dataflow`. When channels
+    are dropped, they are dropped from `reordered_channels.bin` and also
+    the dataflow.
     
     Returns: dict
         n_chan : the number of channels in the binary file
+            This number EXCLUDES dropped channels
+            It will always be len(dataflow)
         chanMap : 0-based index of the channels to take
+            This will always be a simple range(n_chan), because the channels
+            in `reordered_channels.bin` are already reordered and dropped.
         xc : x-coordinate of each channel in microns
+            Taken directly from dataflow
         yc : y-coordinate of each channel in microns
+            Taken directly from dataflow
         kcoords : group number of each channel
+            Taken directly from dataflow
     """
     ## Create the channel map for kilosort
     # Assume the channels have already been ordered properly in the binary file
     # (that is, in the same order as `dataflow` above)
     # so the channel map for kilosort is simply an arange
-    # TODO: figure out how to handle dropped channels. I think in that case,
-    # 'n_chan' stays the same, but chanMap0ind is missing some entries
-    Nchannels = len(dataflow)
-    chanMap0ind = np.arange(Nchannels)
+    n_chan = len(dataflow)
+    chanMap = np.arange(n_chan)
     
     # Extract from dataflow
     xcoords = dataflow['xcoord'].values.astype(float)
     ycoords = dataflow['ycoord'].values.astype(float)
     kcoords = dataflow['kcoord'].values
 
+    # The 'ycoord' is a depth in the dataflow, which means it should be negative
+    # here, so that Phy will plot the most superficial depths on top
+    ycoords = -ycoords
+
     # Save the channel map as a matfile in the session directory
     # syntax of these keys has changed for json files vs old matlab files
     # the tolist() is to convert to native python types, not numpy
     ks_json = {
-        'n_chan': Nchannels,
-        'chanMap': chanMap0ind.tolist(),
+        'n_chan': n_chan,
+        'chanMap': chanMap.tolist(),
         'xc': xcoords.tolist(),
         'yc': ycoords.tolist(),
         'kcoords': kcoords.tolist(),
