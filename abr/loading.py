@@ -71,33 +71,59 @@ def load_recording(recording_directory):
     }
 
 def get_ABR_data_paths():
+    """Set directories for ABR analysis separately for each computer
+    
+    This script gets the hostname and returns directories to use for
+    ABR data and data storage.
+    
+    Returns: GUIdata_directory, Pickle_directory
+        GUIdata_directory : path to location of raw ABR data
+        Pickle_directory : path to location where intermediate data files
+            and figures can be stored
+    """
+    # Get the hostname
     computer = socket.gethostname()
+    
+    # Appropriately set the directories based on hostname
     if computer == 'squid':
         # Rowan's lab desktop
         GUIdata_directory = os.path.normpath(os.path.expanduser(
             '~/mnt/cuttlefish/surgery/abr_data'))
         Pickle_directory = os.path.expanduser('~/mnt/cuttlefish/rowan/ABR/Figs_Pickles')
+    
     elif computer == 'mantaray':
         # The surgery computer- windows partition
         GUIdata_directory = os.path.normpath(os.path.expanduser(
             '~/mnt/cuttlefish/surgery/abr_data'))
         Pickle_directory = os.path.normpath(os.path.expanduser(
             '~/Pickle_Temporary_Storage'))
+    
     elif computer == 'NSY-0183-PC':
         # Rowan's new laptop
         GUIdata_directory = os.path.normpath(os.path.expanduser(
             'C:/Users/kgargiu/Documents/GitHub/pickles'))
         Pickle_directory = GUIdata_directory
+    
     elif computer=='Theseus':
         GUIdata_directory = os.path.normpath(os.path.expanduser(
             'C:/Users/kgarg/Documents/GitHub/pickles'))
         Pickle_directory =  GUIdata_directory
+    
+    elif computer == 'cephalopod':
+        # Chris' computer
+        GUIdata_directory = os.path.normpath(os.path.expanduser(
+            '~/mnt/cuttlefish/surgery/abr_data'))
+        Pickle_directory = os.path.normpath(os.path.expanduser(
+            '~/mnt/cuttlefish/chris/data/20250720_abr_data'))
+    
     else:
+        # defaults
         GUIdata_directory = os.path.normpath(os.path.expanduser(
             '~/mnt/cuttlefish/surgery/abr_data'))
         Pickle_directory = os.path.normpath(os.path.expanduser(
             '~/Pickle_Temporary_Storage'))
-    return GUIdata_directory,Pickle_directory
+    
+    return GUIdata_directory, Pickle_directory
 
 def get_metadata(data_directory, datestring, metadata_version):
     """Get the metadata from a day of recordings
