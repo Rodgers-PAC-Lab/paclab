@@ -464,11 +464,17 @@ def get_video_start_time(video_save_signal, multiple_action='error'):
     else:
         return trig_time_a, trig_duration_a
 
-def get_recording_start_time(trig_signal, multiple_action='error'):
+def get_recording_start_time(trig_signal, maximum_duration=10000, 
+    multiple_action='error'):
     """Return the time (in samples) of the recording start pulse
     
     trig_signal : array-like
         The trigger signal
+    
+    maximum_duration : int
+        The maximum duration of the pulse
+        My notes say this should be 100 ms or 2500 samples
+        But for some reason in Room D it is more like 300 ms
     
     multiple_action : string or None
         Controls what happens if multiple triggers detected
@@ -477,6 +483,7 @@ def get_recording_start_time(trig_signal, multiple_action='error'):
         anything else : do nothing
     
     An error occurs if this trigger is too short or too long
+    Note: Disabled this error since apparently it can vary
     
     If multiple triggers are detected, they are all returned in an array
     If only one, then only that one is returned
@@ -489,7 +496,8 @@ def get_recording_start_time(trig_signal, multiple_action='error'):
     # think is when the nosepoke is initialized
     trig_time_a, trig_duration_a = (
         extract_onsets_and_durations(
-        trig_signal, delta=5000, verbose=False, maximum_duration=5000))
+        trig_signal, delta=5000, verbose=False, 
+        maximum_duration=maximum_duration))
     
     if len(trig_time_a) != 1:
         if multiple_action == 'error':
@@ -497,8 +505,8 @@ def get_recording_start_time(trig_signal, multiple_action='error'):
         elif multiple_action in ['warn', 'warning']:
             print("warning: expected 1 trig, got {}".format(len(trig_time_a)))
 
-    assert (trig_duration_a > 2495).all()
-    assert (trig_duration_a < 2540).all()
+    #~ assert (trig_duration_a > 2495).all()
+    #~ assert (trig_duration_a < 2540).all()
 
     if len(trig_time_a) == 1:
         return trig_time_a[0]
