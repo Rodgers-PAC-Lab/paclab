@@ -1,4 +1,5 @@
 ## Helper functions for working with 3D kinematics
+import os
 import numpy as np
 import scipy.io
 from scipy.spatial.transform import Rotation as R
@@ -612,13 +613,16 @@ def euclidean_distance_3D(predicted, target, axis = 0):
     
     axis = 0 averages within keypoints across frames
     axis = 1 averages within frames across keypoints
+    axis = None: no average
     """
     assert predicted.shape == target.shape
     assert predicted.shape[1] in [2, 3]
 
     mpjpe = np.linalg.norm((target - predicted), ord=2, axis=1)
-
-    return nanmean_infmean(mpjpe, axis)    
+    
+    if axis is not None:
+        return nanmean_infmean(mpjpe, axis)
+    return mpjpe
 
 def compute_all2all_distances(pred, edges = None, index_base = 1):
     '''
