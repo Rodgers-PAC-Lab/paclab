@@ -829,6 +829,9 @@ def fit_analog_flash_to_behavior_flash(
     trials = trials.join(
         flash_time_behavior_s.rename('flash_time_behavior_s'))
     
+    #Same fix as above
+    flash_time_behavior_s = trials['flash_time_behavior_s'].values
+    
     # Warn on any null
     # TODO: does this ever actually happen?
     null_mask = trials['flash_time_behavior_s'].isnull()
