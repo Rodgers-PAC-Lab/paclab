@@ -821,6 +821,9 @@ def fit_analog_flash_to_behavior_flash(
         print('error: {} behavior trials but {} analog trials'.format(
             len(trials), len(flash_time_analog_s)))
     
+    #Ensure the flashes are the same in the flashes and trials dataframes
+    #AM bug fix 2025-7-25
+    flash_time_analog_s = trials['flash_time_analog_s'].values
     
     ## Next, store the reported flash times in `trials`
     trials = trials.join(
