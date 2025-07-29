@@ -853,7 +853,7 @@ def fit_analog_flash_to_behavior_flash(
     ## Calculate the residuals
     analog_pred_from_behavior = np.polyval(
         [behavior2analog_fit_rpi01.slope, behavior2analog_fit_rpi01.intercept], 
-        flash_time_behavior_s.values)
+        flash_time_behavior_s)
     resids = flash_time_analog_s - analog_pred_from_behavior
 
     # Warn if these metrics are broken
