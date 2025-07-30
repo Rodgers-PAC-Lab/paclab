@@ -1,4 +1,5 @@
 ## Helper functions for working with 3D kinematics
+
 import os
 import numpy as np
 import scipy.io
@@ -6,6 +7,76 @@ from scipy.spatial.transform import Rotation as R
 import pandas
 import pickle
 import ffmpeg
+
+
+def get_skeleton():
+    """Return the joints and edges in the mouse22 skeleton
+    
+    This comes from sdannce.dannce.engine.skeletons.utils
+    
+    Note that HipL and HipR do not appear in _BODY_CONNECTIVITY but they do
+    occur in _JOINT_NAMES
+    
+    pandas.DataFrame(_BODY_CONNECTIVITY['mouse22']).replace(
+        pandas.Series(_JOINT_NAMES['mouse22']))    
+    
+    Returns: joint_names, body_connectivity
+        joint_names : a list of joint names in standard order
+        body_connectivity : a list of tuples of joint names, one per edge
+    """
+    joint_names = [
+        'EarL',
+        'EarR',
+        'Snout',
+        'SpineF',
+        'SpineM',
+        'Tail(base)',
+        'Tail(mid)',
+        'Tail(end)',
+        'ForepawL',
+        'WristL',
+        'ElbowL',
+        'ShoulderL',
+        'ForepawR',
+        'WristR',
+        'ElbowR',
+        'ShoulderR',
+        'HindpawL',
+        'AnkleL',
+        'KneeL',
+        'HindpawR',
+        'AnkleR',
+        'KneeR',
+        ]
+
+    body_connectivity = [
+        ('EarL', 'EarR'),
+        ('EarR', 'Snout'),
+        ('EarL', 'Snout'),
+        ('EarL', 'SpineF'),
+        ('EarR', 'SpineF'),
+        ('Snout', 'SpineF'),
+        ('SpineF', 'SpineM'),
+        ('SpineM', 'Tail(base)'),
+        ('Tail(base)', 'Tail(mid)'),
+        ('Tail(mid)', 'Tail(end)'),
+        ('ForepawL', 'WristL'),
+        ('WristL', 'ElbowL'),
+        ('ElbowL', 'ShoulderL'),
+        ('ShoulderL', 'SpineF'),
+        ('ForepawR', 'WristR'),
+        ('WristR', 'ElbowR'),
+        ('ElbowR', 'ShoulderR'),
+        ('ShoulderR', 'SpineF'),    
+        ('HindpawL', 'AnkleL'),
+        ('AnkleL', 'KneeL'),
+        ('KneeL', 'SpineM'),
+        ('HindpawR', 'AnkleR'),
+        ('AnkleR', 'KneeR'),
+        ('KneeR', 'SpineM'),    
+        ] 
+    
+    return joint_names, body_connectivity
 
 ## Loading + misc helperfunctions
 def load_COM(filepath):
