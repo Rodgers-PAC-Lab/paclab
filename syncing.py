@@ -821,10 +821,16 @@ def fit_analog_flash_to_behavior_flash(
         print('error: {} behavior trials but {} analog trials'.format(
             len(trials), len(flash_time_analog_s)))
     
+    #Ensure the flashes are the same in the flashes and trials dataframes
+    #AM bug fix 2025-7-25
+    flash_time_analog_s = trials['flash_time_analog_s'].values
     
     ## Next, store the reported flash times in `trials`
     trials = trials.join(
         flash_time_behavior_s.rename('flash_time_behavior_s'))
+    
+    #Same fix as above
+    flash_time_behavior_s = trials['flash_time_behavior_s'].values
     
     # Warn on any null
     # TODO: does this ever actually happen?
@@ -847,7 +853,7 @@ def fit_analog_flash_to_behavior_flash(
     ## Calculate the residuals
     analog_pred_from_behavior = np.polyval(
         [behavior2analog_fit_rpi01.slope, behavior2analog_fit_rpi01.intercept], 
-        flash_time_behavior_s.values)
+        flash_time_behavior_s)
     resids = flash_time_analog_s - analog_pred_from_behavior
 
     # Warn if these metrics are broken
