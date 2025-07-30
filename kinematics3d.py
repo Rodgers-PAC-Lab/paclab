@@ -21,6 +21,8 @@ def load_label3d_data(filename):
           These are points in the undistorted (rectilinear) image
     
     Returns: dict with the following items
+        'camera_names' : list of camera names. Used to index all other 
+            returned items
         'camera_parameters' : dict with the following items
             'scene_matrix' : DataFrame, scene matrix (K) for each camera
             'rotation_matrix' : DataFrame, rotation matrix (r) for each camera
@@ -39,6 +41,9 @@ def load_label3d_data(filename):
     # Load data
     data = scipy.io.loadmat(filename)
 
+    # Get camera names
+    cam_names = [val.item() for val in data['camnames'].squeeze()]
+
     # Parse camera parameters
     camera_parameters = _parse_camera_parameters(data)
 
@@ -47,6 +52,7 @@ def load_label3d_data(filename):
     
     # Return
     return {
+        'camera_names': cam_names,
         'camera_parameters': camera_parameters,
         'points_2d': points_2d,
         'points_3d': points_3d,
