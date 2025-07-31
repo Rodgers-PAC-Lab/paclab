@@ -1,6 +1,9 @@
 ## This is for functions for dealing with SLEAP data
 
-import tables
+try:
+    import tables
+except ImportError:
+    print('cannot import tables')
 import pandas
 import matplotlib.pyplot as plt
 import my.plot
