@@ -845,7 +845,9 @@ def joint_angle(ego, return_rots = False):
             z = k1_t - kv_t
             torso = ego[:, :, 3] + kv_t
             rot = _compute_rotation_matrix(z, torso)
-        rots[r] = rot
+            rot[:, 0] = -1*rot[:, 0]
+            rot[:, 1] = -1*rot[:, 1]
+            rots[r] = rot
         
     ## rotation matrix for spine m is identity
     rots["SpineM"] = np.stack([np.eye(3) for _ in range(ego.shape[0])])
