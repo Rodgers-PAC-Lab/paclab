@@ -855,7 +855,7 @@ def joint_angle(ego, return_rots = False):
     #  in effect, it is constrained to only rotate around the torso axis
     #  and can be used to compute torsion of the upper spine wrt the mid spine
     
-    collar = np.concatenate((ego[:, :, 11, np.newaxis] - ego[:, :, 3, np.newaxis], ego[:, :, 15, np.newaxis] - ego[:, :, np.newaxis]), axis = 2)
+    collar = np.concatenate((ego[:, :, 11, np.newaxis] - ego[:, :, 3, np.newaxis], ego[:, :, 15, np.newaxis] - ego[:, :,3, np.newaxis]), axis = 2)
     
     # normalize to enforce rigidity
     collar = collar / np.linalg.norm(collar, axis = 1).reshape(-1, 1, 2)
