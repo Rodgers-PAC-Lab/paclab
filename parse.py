@@ -2,7 +2,10 @@
 import datetime
 import os
 import numpy as np
-import tables
+try:
+    import tables
+except ImportError:
+    print('cannot import tables')
 import pandas
 import glob
 import json
