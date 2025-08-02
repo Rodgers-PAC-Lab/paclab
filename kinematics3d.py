@@ -263,7 +263,6 @@ def _compute_rotation_matrix(z, x_ref):
     
 def compute_rotation_matrix(k1, kv, k2):
     '''
-    OLD- do not use
     Compute rotation matrix for the point at kv relative to the vectors from kv
     through k1 and k2. The local z-axis is the vector from kv to k2. The local x-
     axis is the vector orthogonal to z and coplanar with z and the vector between
@@ -275,21 +274,20 @@ def compute_rotation_matrix(k1, kv, k2):
 
     returns T x 3 x 3 tensor giving rotation matrix
     '''
-    z = k2 - kv
-    x_ref = k1 - kv
+    z = k1 - kv
+    x_ref = k2 - kv
     
     return _compute_rotation_matrix(z, x_ref)
 
-def compute_rotation_matrix2(ref1, ref2, kv, k2):
+def compute_rotation_matrix2(ref1, ref2, k1, kv):
     '''
-        OLD- do not use
         For two edges that don't share a keypoint. Useful for shoulder.
        kv: vertex joint
-       k2: distal joint
+       k1: proximal joint
        ref1: origin of reference vector
        ref2: endpoint of reference vector
     '''
-    z = k2 - kv
+    z = k1 - kv
     x_ref = ref2 - ref1
     x_ref_at_kv = kv + x_ref
     
@@ -487,8 +485,8 @@ def cart2sphere(x, y, z):
     length = np.sqrt(x ** 2 + y ** 2 + z ** 2)
     azim = np.arctan2(y, x)
     elev = np.arccos(z / length)
-    assert (azim > -np.pi).all()
-    assert (azim < np.pi).all()
+    assert (azim >= -np.pi).all()
+    assert (azim <= np.pi).all()
     return length, azim, elev
 
 def sphere2cart(length, azim, elev):
@@ -572,7 +570,7 @@ def joint_angle(x1, x2, x3=None):
     v2norm = v2.divide(sphere2['length'], axis=0)
     
     # Arccos of the dot product
-    res['compound'] = np.arccos((v1norm * v2norm).sum(axis=1))
+    # res['compound'] = np.arccos((v1norm * v2norm).sum(axis=1))
 
     ## Return
     return res
