@@ -175,6 +175,9 @@ def _parse_labeled_points(data):
         # Squeeze
         frame_numbers = frame_numbers.squeeze()
         
+        # Force convert to int, because it's sometimes uint64 and sometimes int64
+        frame_numbers = frame_numbers.astype(int)
+        
         # DataFrame points_2d
         points_2d = pandas.DataFrame(points_2d)
         points_2d.index = pandas.Series(frame_numbers, name='frame_number')
