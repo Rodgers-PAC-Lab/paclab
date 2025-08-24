@@ -164,7 +164,6 @@ def get_metadata(data_directory, datestring, metadata_version):
     # Deserialize the amplitudes with json
     metadata['amplitude'] = metadata['amplitude'].apply(json.loads)
 
-
     # Form ch0_config and make recording_name from session number
     if metadata_version=='v4':
         metadata['recording_name'] = ['{:03d}'.format(n) for n in metadata['session'].values]
@@ -180,10 +179,12 @@ def get_metadata(data_directory, datestring, metadata_version):
     else:
         print("ERROR, METADATA VERSION NOT V4, V5, OR V6")
         return
+    
     # Form the full path to the session
     metadata['datafile'] = [
         os.path.join(data_directory, recording_name)
         for recording_name in metadata['recording_name']]
+    
     return metadata
 
 def drop_torn_packets(data,header_df, debug_plot=False,speaker_channel=7):
