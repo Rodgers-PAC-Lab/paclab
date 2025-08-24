@@ -6,7 +6,7 @@ import numpy as np
 import io
 import os
 
-def load(doc_id, sheet_name=None):
+def load(doc_id, sheet_name=None, normalize_case=True):
     """Load a google sheet at the specified url
     
     doc_id : str
@@ -14,6 +14,12 @@ def load(doc_id, sheet_name=None):
         before "/edit", containing no slashes but sometimes hyphens.
     
     sheet_name : str or None
+        The name of the sheet (i.e., tab) to load
+        If None, the first sheet is loaded
+    
+    normalize_case : bool
+        If True, the case of the column headers is normalized by removing
+        spaces and lower-casing
     """
 
     # Form URL
@@ -39,8 +45,9 @@ def load(doc_id, sheet_name=None):
         sheet = pandas.read_excel(excel_file, sheet_name)
 
         # Fix the column names
-        sheet.columns = [
-            normalize_case_of_string(col) for col in sheet.columns]
+        if normalize_case:
+            sheet.columns = [
+                normalize_case_of_string(col) for col in sheet.columns]
         
         # Label row numbers starting with 2 to match google sheet
         sheet.index = sheet.index.values + 2
