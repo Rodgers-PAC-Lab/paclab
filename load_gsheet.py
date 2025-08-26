@@ -6,6 +6,54 @@ import numpy as np
 import io
 import os
 
+def load(doc_id, sheet_name=None, normalize_case=True):
+    """Load a google sheet at the specified url
+    
+    doc_id : str
+        This is a long alphanumeric string, after "spreadsheets/d/" and
+        before "/edit", containing no slashes but sometimes hyphens.
+    
+    sheet_name : str or None
+        The name of the sheet (i.e., tab) to load
+        If None, the first sheet is loaded
+    
+    normalize_case : bool
+        If True, the case of the column headers is normalized by removing
+        spaces and lower-casing
+    """
+
+    # Form URL
+    # The sheet must be visible to anyone with the link
+    # Export as xlsx because the CSV format doesn't support multiple sheets
+    url = (
+        'https://docs.google.com/spreadsheets/d/' + # google prefix
+        doc_id + 
+        '/export?format=xlsx' # export command
+        )
+
+    # Get data
+    request_data = requests.get(url)
+
+    # Parse each sheet into a dict
+    res_d = {}
+    with pandas.ExcelFile(io.BytesIO(request_data.content)) as excel_file:
+        # Default to first sheet
+        if sheet_name is None:
+            sheet_name = excel_file.sheet_names[0]
+
+        # Read this sheet
+        sheet = pandas.read_excel(excel_file, sheet_name)
+
+        # Fix the column names
+        if normalize_case:
+            sheet.columns = [
+                normalize_case_of_string(col) for col in sheet.columns]
+        
+        # Label row numbers starting with 2 to match google sheet
+        sheet.index = sheet.index.values + 2
+
+    return sheet    
+
 def normalize_case_of_string(s):
     """Lower-case string and replace spaces with underscores"""
     return s.lower().replace(' ', '_')
