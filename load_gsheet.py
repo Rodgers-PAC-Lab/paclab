@@ -123,13 +123,11 @@ def abigail_sheet(drop_long_columns=True):
         '1EDIHYOcQYYXEwoCEpfGCMsPImGwTRgyhQxEr2nClMRs/' # doc ID
         'export?format=xlsx' # export command
         )
-    
-
 
     # Skip these sheets
     skip_sheets = [
         'Directories', 'Behavior_mice', 'Corrupted_files', 
-        'Visual_channel_table', 'Mice',
+        'Visual_channel_table', 'mouse_list', 'Mice',
         ]    
     
     # Skip these columns (in normalized case)
@@ -352,7 +350,7 @@ def cedric_ad_sheet(drop_long_columns=True):
     # Skip these sheets
     skip_sheets = [
         'Directories', 'Behavior_mice', 'Corrupted_files', 
-        'Visual_channel_table', 'Mice',
+        'Visual_channel_table', 'mouse_list', 'Mice',
         ]    
     
     # Skip these columns (in normalized case)
