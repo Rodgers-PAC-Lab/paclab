@@ -108,6 +108,12 @@ def get_ABR_data_paths():
         GUIdata_directory = os.path.normpath(os.path.expanduser(
             'C:/Users/kgarg/Documents/GitHub/pickles'))
         Pickle_directory =  GUIdata_directory
+
+    elif computer=='kelp':
+        GUIdata_directory = os.path.normpath(os.path.expanduser(
+            '~/mnt/cuttlefish/surgery/abr_data'))
+        Pickle_directory = os.path.expanduser(
+        '~/mnt/cuttlefish/cedric/data/ABR/pickles')
     
     elif computer == 'cephalopod':
         # Chris' computer
@@ -115,7 +121,7 @@ def get_ABR_data_paths():
             '~/mnt/cuttlefish/surgery/abr_data'))
         Pickle_directory = os.path.normpath(os.path.expanduser(
             '~/mnt/cuttlefish/chris/data/20250720_abr_data'))
-    
+            
     else:
         # defaults
         GUIdata_directory = os.path.normpath(os.path.expanduser(

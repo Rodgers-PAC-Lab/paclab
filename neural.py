@@ -313,7 +313,8 @@ def load_metadata_from_xml(neural_root, logger, session_name):
     
     elif xml_data['channel_count'] == 128:
         assert xml_data['rec_mode_name'] == '"128ch"'
-        assert xml_data['rec_mode'] == '3'
+        # Using 128 channels with red LIB sets rec mode to 7
+        assert xml_data['rec_mode'] == '3' or xml_data['rec_mode'] == '7'
         xml_data.pop('rec_mode_name')
         xml_data.pop('rec_mode')
     
