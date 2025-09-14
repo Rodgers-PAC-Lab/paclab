@@ -807,6 +807,11 @@ def load_cluster_groups(sort_dir):
     If the curation hasn't been done yet, the results will be different,
     I think it includes KSLabel instead.
     
+    If the cluster isn't labeled, it might be missing from this file.
+    
+    This function should be replaced in all cases with `load_cluster_info`,
+    which provides a superset of this information.
+    
     Returns: DataFrame, with columns
         'cluster_id': cluster id
         'group': 'good', 'MUA', or 'noise' label
@@ -820,8 +825,7 @@ def load_cluster_groups(sort_dir):
 def load_cluster_info(sort_dir):
     """Returns info about each cluster from kilosort
 
-    Returns: DataFrame, with columns
-        'cluster_id': cluster id
+    Returns: DataFrame, with Index 'cluster_id', and columns
         'Amplitude': not sure what units these are in
         'ContamPct': ? Appears to exceed 100 in some cases
         'KSLabel': kilosort group, ignore this
@@ -835,8 +839,11 @@ def load_cluster_info(sort_dir):
         'n_spikes' : number of spikes, probably
         'sh': ? mostly zero
     """
-    # This has n_manual_clusters rows, with the group for each
+    # Load data
     cluster_info = pandas.read_table(os.path.join(sort_dir, 
         'cluster_info.tsv'))
+    
+    # Index by cluster_id
+    cluster_info = cluster_info.set_index('cluster_id')
     
     return cluster_info
