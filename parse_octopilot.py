@@ -14,13 +14,17 @@ def str2dt(s):
     tz = pytz.timezone('America/New_York')
     return datetime.datetime.fromisoformat(s).astimezone(tz)
 
-def load_session(octopilot_root, octopilot_session_name):
+def load_session(octopilot_root, octopilot_session_name, 
+    suppress_order_warnings=False):
     """Load data from octopilot session
     
     octopilot_root : str
         Path to root of octopilot data
     
     octopilot_session_name : str
+    
+    suppress_order_warnings : bool
+        If True, suppresses out-of-order warnings in sync_sounds
     
     Workflow
     * Load the CSV files from the octopilot session
@@ -159,7 +163,9 @@ def load_session(octopilot_root, octopilot_session_name):
 
 
         ## Sync sounds and join sound plans
-        sounds = sync_sounds(sounds, octopilot_session_name)
+        sounds = sync_sounds(
+            sounds, octopilot_session_name, 
+            suppress_order_warnings=suppress_order_warnings)
 
         # Join sound plans onto sounds
         sounds = join_sound_plans_on_sounds(sounds, sound_plans)
@@ -196,7 +202,39 @@ def load_session(octopilot_root, octopilot_session_name):
         'flash_wrt_session_start': flash_wrt_session_start,
         }
 
-def sync_sounds(sounds, octopilot_session_name):
+def sync_sounds(sounds, octopilot_session_name, suppress_order_warnings=False):
+    """Estimates the clock time of each row in `sounds`.
+    
+    For each frame of audio, the rpi reports the current clock time and
+    jack audio frame. We can use that to compute the relationship between
+    jack audio frames and clock time. Then, after accounting for buffer delays,
+    we can estimate the time that the sound was played.
+    
+    Workflow
+    ---
+    * Compute sounds['message_frame'] using 'last_frame_time' and 
+      'frames_since_cycle_start'
+    * Compute sounds['speaker_frame'] by compensating for buffer
+    * Fixes wraparound issues and checks that the rows are in order, or
+      warns if they are not.
+    * Fits 'message_frame' to 'message_time_s' to determine the link between
+      jack frames and clock time.
+    * Uses that fit to compute 'speaker_time_s', the estimate clock time at
+      which the sound played.
+    
+    Arguments
+    ---
+    sounds : DataFrame
+    octopilot_session_name : str
+        Name of the session, used only for printing warning messages
+    suppress_order_warnings : bool
+        If True, suppress warning about the rows in `sounds` being out of
+        order.
+    
+    Returns: DataFrame
+        This is `sounds` with a few columns added, notably 'speaker_time_s'.
+        The order of the rows is likely different.
+    """
     ## Account for buffering delay
     # This is mostly from paclab.parse.load_sounds_played
     # Calculate message_frame, the frame number at the time the message was sent
@@ -253,7 +291,7 @@ def sync_sounds(sounds, octopilot_session_name):
         # the same frame
         diff_time = np.diff(subdf['message_frame'])
         n_out_of_order = np.sum(diff_time < 0)
-        if n_out_of_order > 0:
+        if n_out_of_order > 0 and not suppress_order_warnings:
             print(
                 "warning: {} rows of sounds_played_df ".format(n_out_of_order) +
                 f"in session {octopilot_session_name} " +
