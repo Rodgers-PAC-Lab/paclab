@@ -802,9 +802,41 @@ def load_spike_amplitudes(sort_dir):
     return spike_amplitude.flatten()
 
 def load_cluster_groups(sort_dir):
-    """Returns type (good, MUA, noise) of each cluster from kilosort"""
+    """Returns type (good, MUA, noise) of each cluster from kilosort
+    
+    If the curation hasn't been done yet, the results will be different,
+    I think it includes KSLabel instead.
+    
+    Returns: DataFrame, with columns
+        'cluster_id': cluster id
+        'group': 'good', 'MUA', or 'noise' label
+    """
     # This has n_manual_clusters rows, with the group for each
     cluster_group = pandas.read_table(os.path.join(sort_dir, 
         'cluster_group.tsv'))
     
     return cluster_group
+
+def load_cluster_info(sort_dir):
+    """Returns info about each cluster from kilosort
+
+    Returns: DataFrame, with columns
+        'cluster_id': cluster id
+        'Amplitude': not sure what units these are in
+        'ContamPct': ? Appears to exceed 100 in some cases
+        'KSLabel': kilosort group, ignore this
+        'amp': not sure waht units these are in, and is not linearly related
+            to Amplitude
+        'ch' : some indication of what channel it is on, presumably in the 
+            order of the binary file?
+        'depth' : probably the "y" from the channel map
+        'fr' : firing rate, probably
+        'group': is this always the same as cluster_group.tsv?
+        'n_spikes' : number of spikes, probably
+        'sh': ? mostly zero
+    """
+    # This has n_manual_clusters rows, with the group for each
+    cluster_info = pandas.read_table(os.path.join(sort_dir, 
+        'cluster_info.tsv'))
+    
+    return cluster_info
