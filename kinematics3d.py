@@ -1080,7 +1080,7 @@ def compute_all2all_distances(pred, edges = None, index_base = 1):
     return distances
                 
 ## Egocentering and alignment
-def egocenter(pred, bindcenter = 5, align = '3d', b1 = 3, b2 = 6, index_base = 1, keep_bindcenter = False):
+def egocenter(pred, bindcenter = 5, align = '3d', b1 = 3, b2 = 6, index_base = 1, keep_bindcenter = True):
     '''
     Egocenter data so that the bindcenter keypoint is situated at the origin. Optionally, this function
     also rotates (aligns) the skeleton so that the vector from b2 to b1 always points east.
