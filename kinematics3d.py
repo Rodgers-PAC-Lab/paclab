@@ -994,6 +994,51 @@ def joint_angle_CR(x1, x2, x3=None):
     ## Return
     return res
 
+
+def unwrap_shift_global(theta, correction):
+    '''
+    Correct angle discontinuities by unwrapping, subtracting a correction, and
+    re-wrapping onto [-pi, pi].
+    
+    Works well for time series whose true range is within [-pi, pi] (i.e. never
+    completes a full 2pi revolution) but has discontinuities due to a poor
+    choice for the zero angle. Use for segments of kinematics where we think
+    the tracking is decent, and determine correction empirically.
+    
+    TODO: find an algorithmic way to pick the best correction.
+    
+    '''
+    un = np.unwrap(theta)
+    adj = un - correction
+    
+    return (adj + np.pi) % (2*np.pi) - np.pi
+
+def _unwrap_shift_global(theta, correction, L=-np.pi):
+    """
+    AI-GENERATED. Appears to behave identically to unwrap_shift_global, but is 
+    allegedly more robust.
+    
+    ------
+    Unwrap theta, subtract correction, then shift by a single integer multiple 
+    of 2p so result lies in [L, L+2p). This preserves smoothness/variance.
+    """
+    two_pi = 2*np.pi
+    un = np.unwrap(theta)
+    adj = un - correction
+
+    # find integer m so that adj - m*2p all lie in [L, L+2p)
+    # one simple robust choice is to align the midpoint or min:
+    m = np.floor((adj.min() - L) / two_pi).astype(int)
+    # try small range of ms to be safe (span < 2p so one will work)
+    for mm in range(m-1, m+3):
+        cand = adj - mm*two_pi
+        if (cand >= L).all() and (cand < L + two_pi).all():
+            return cand  # safe, single global shift applied
+
+    # fallback: modular map (shouldn't be needed if span < 2p)
+    return (adj - L) % two_pi + L
+
+
 ## Distance functions
 def compute_distance(a, b):
     '''
