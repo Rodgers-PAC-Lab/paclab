@@ -1245,12 +1245,25 @@ def gaussianfilterdata(pred, sigma = 1):
     pred: DANNCE prediction data. Expected to be shape Tx1x3xK or Tx3xK
     sigma: the standard deviation of the Gaussian kernel
     '''
+    pred = pred.squeeze()
     
     L = pred.shape[0]
     xx = (np.arange(1, L) - np.round(L/2)).T
-    g = np.exp(-.5 * xx**2 / sigma**2) / np.sqrt(2*np.pi*sigma**2) # Think this is correct. Confirm w/ a PI
-    ddt = np.fft.fftshift(np.fft.ifft(np.fft.fft(pred[:-1]) * np.fft.fft(g)))
-    return ddt
+    g = np.exp(-.5 * xx**2 / sigma**2) / np.sqrt(2*np.pi*sigma**2)
+    if len(pred.shape) == 2:
+        g = np.reshape(g, (-1, 1))
+    elif len(pred.shape) == 3:
+        g = np.reshape(g, (-1, 1, 1))
+    
+    #~ ddt = np.fft.fftshift(np.fft.ifft(np.fft.fft(pred[:-1]) * np.fft.fft(g)))
+    
+    # FFT convolution along time axis
+    F_pred = np.fft.fft(pred, axis=0)
+    F_g = np.fft.fft(g, n=L, axis=0)
+    smoothed = np.fft.ifft(F_pred * F_g, axis=0)
+    smoothed = np.fft.fftshift(smoothed, axes=0)
+    
+    return np.real(smoothed) 
     
 def gaussianfilterdata_derivative(pred, sigma = 1):
     '''
