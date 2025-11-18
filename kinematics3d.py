@@ -1125,7 +1125,7 @@ def compute_all2all_distances(pred, edges = None, index_base = 1):
     return distances
                 
 ## Egocentering and alignment
-def egocenter(pred, bindcenter = 5, align = '3d', b1 = 3, b2 = 6, index_base = 1, keep_bindcenter = True):
+def egocenter(pred, bindcenter = 5, align = '3d', b1 = 3, b2 = 6, index_base = 1, keep_bindcenter = True, return_all = False):
     '''
     Egocenter data so that the bindcenter keypoint is situated at the origin. Optionally, this function
     also rotates (aligns) the skeleton so that the vector from b2 to b1 always points east.
@@ -1144,10 +1144,12 @@ def egocenter(pred, bindcenter = 5, align = '3d', b1 = 3, b2 = 6, index_base = 1
         mouse22 assuming 1-indexing (Note: bindcenter is assumed to be indexed between b1 and b2)
     index_base: specifies whether joint indices are specified as indexed from 0 or 1. Only needed if angles_to_compute is given
                 as list of keypoint indices. Default: 1
-    keep_bindcenter: boolean flag which determines whether bindcenter will be retained in the output. Default: False
+    keep_bindcenter: boolean flag which determines whether bindcenter will be retained in the output. Default: True
 
     returns ego: if keep_bindcenter is False, a T x 3 x K-1 array containing egocentered coordinates for each keypoint excluding bindcenter across time
                  if keep_bindcenter is True, then an array with same shape as pred
+    also returns bindcenter_xyz, an array with the subtracted position, and R_all, 
+         an array of rotation matrices if return_all = True
     '''
     if len(pred.shape) > 3:
         pred = np.squeeze(pred)
@@ -1162,6 +1164,7 @@ def egocenter(pred, bindcenter = 5, align = '3d', b1 = 3, b2 = 6, index_base = 1
 
 
     # Apply egocentering by subtracing bindcenter position
+    bindcenter_xyz = pred[:, :, bindcenter]
     ego = pred - pred[:, :, [bindcenter for i in range(pred.shape[2])]]
 
     if not keep_bindcenter:
@@ -1172,6 +1175,8 @@ def egocenter(pred, bindcenter = 5, align = '3d', b1 = 3, b2 = 6, index_base = 1
     
     if align is None:
         return ego
+    
+    R_all = []
     
     ## Now do the alignment
     if align == '2d':
@@ -1198,6 +1203,7 @@ def egocenter(pred, bindcenter = 5, align = '3d', b1 = 3, b2 = 6, index_base = 1
             
             # Apply rotation
             ego[t, :2, :] = R @ ego[t, :2, :]
+            R_all.append(R)
         
     elif align == '3d':
         # Grab the alignment vector
@@ -1235,6 +1241,10 @@ def egocenter(pred, bindcenter = 5, align = '3d', b1 = 3, b2 = 6, index_base = 1
             
             # Finally apply the rotation
             ego[t] = R @ ego[t]
+            R_all.append(R)
+
+    if return_all:
+        return ego, bindcenter_xyz, np.array(R_all)
     
     return ego
 
