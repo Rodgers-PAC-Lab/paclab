@@ -39,7 +39,7 @@ class MainWindow(PyQt5.QtWidgets.QMainWindow):
             verbose=False, 
             serial_port='/dev/ttyACM0', 
             serial_timeout=0.1,
-            abr_data_path='/home/mouse/mnt/cuttlefish/surgery/abr_data',
+            abr_data_path='/home/rowan/mnt/cuttlefish/rowan/ABR/abr_data',
             experimenter=self.experimenter,
             )        
         

@@ -28,7 +28,7 @@ class ABR_Device(object):
         verbose=True, 
         serial_port='/dev/ttyACM0', 
         serial_timeout=0.1,
-        abr_data_path='/home/mouse/mnt/cuttlefish/surgery/abr_data',
+        abr_data_path='/home/rowan/mnt/cuttlefish/rowan/ABR/abr_data',
         experimenter='mouse',
         ):
         """Initialize a new ABR_Device object to collect ABR data.
