@@ -11,55 +11,6 @@ import os
 import numpy as np
 import paclab.abr
 
-"""
-Chunk of code for keeping data in a cyclical buffer
-
-# Keep track of big_data here
-self.big_data_last_col = 0
-self.big_data = None
-self.headers_l = []
-
-## Append to big data
-if self.big_data is None:
-    # Special case, it doesn't exist yet
-    # This is also how we find out how many columns it has
-    self.big_data = data_chunk.copy()
-    self.big_data_last_col = len(data_chunk)
-
-else:
-    # The normal case, self.big_data does exist
-    # This is how long it will be
-    self.new_big_data_last_col = (
-        self.big_data_last_col + len(data_chunk))
-
-    # Grow if needed
-    if self.new_big_data_last_col > len(self.big_data):
-        # Make it twice as big as needed
-        new_len = 2 * self.new_big_data_last_col
-        
-        # Fill it with zeros
-        self.new_big_data = np.zeros(
-            (new_len, self.big_data.shape[1]))
-        
-        # Copy in the old data
-        self.new_big_data[:self.big_data_last_col] = (
-            self.big_data[:self.big_data_last_col])
-        
-        # Rename
-        self.big_data = self.new_big_data
-    
-    # Add the new data at the end
-    self.big_data[
-        self.big_data_last_col:self.new_big_data_last_col] = (
-        data_chunk)
-
-    # Update the pointer
-    self.big_data_last_col = self.new_big_data_last_col
-
-# Store read headers
-self.headers_l.append(data_header)
-"""
-
 class FileWriter(object):
     """Writes data from deques to disk
     
