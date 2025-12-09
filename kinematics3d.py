@@ -846,8 +846,9 @@ def joint_angle(ego, return_rots = False):
             kv_t = ego[:, :, kv]
             
             z = k1_t - kv_t
-            torso = ego[:, :, 3] + kv_t
-            rot = _compute_rotation_matrix(z, torso)
+            # torso = ego[:, :, 3] + kv_t
+            x_ref = np.tile(np.array([1, 0, 0]), (z.shape[0], 1))
+            rot = _compute_rotation_matrix(z, x_ref)
             rot[:, 0] = -1*rot[:, 0]
             rot[:, 1] = -1*rot[:, 1]
             rots[r] = rot
