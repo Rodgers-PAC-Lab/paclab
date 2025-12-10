@@ -792,7 +792,7 @@ def sphere2cart(length, azim, elev):
 
     return x, y, z
 
-def joint_angle(ego, return_rots = False):
+def joint_angle(ego, return_rots = False, apply_correction = True):
     """
     Compute joint angles for egocentered data. These are spherical coordinates
     for the distal limb segment in the local joint coordinate frame
@@ -809,7 +809,10 @@ def joint_angle(ego, return_rots = False):
     the proximal limb segment, and the x-axis is defined as the projection
     of the torso vector into the x-y plane. This is unstable when the direction
     of the proximal limb segment approaches the torso vector, leading to gimbal lock.
-
+    
+    If apply_correction = True, shift the local xy-basis so that the azimuth
+    is circularly mean-centered.
+    
     returns: 3 dicts storing the length, azimuth, and elevation time series for the corresponding segment,
              torsions, a (T,) vector with the spinal torsion time series,
              and rots, a dict containing the rotation matrices used if return_rots = True
@@ -847,11 +850,9 @@ def joint_angle(ego, return_rots = False):
             kv_t = ego[:, :, kv]
             
             z = k1_t - kv_t
-            # torso = ego[:, :, 3] + kv_t
-            x_ref = np.tile(np.array([1,0,0]), (z.shape[0], 1))
+            x_ref = np.tile(np.array([1,0,0]), (z.shape[0], 1)) # torso vector
             rot = _compute_rotation_matrix(z, x_ref)
-            #~ rot[:, 0] = -1*rot[:, 0]
-            #~ rot[:, 1] = -1*rot[:, 1]
+
             rots[r] = rot
         
     ## rotation matrix for spine m is identity
@@ -871,8 +872,8 @@ def joint_angle(ego, return_rots = False):
     tors = np.average(collar, axis = 2)
     
     # build out spine f something like this
-    torso = ego[:, :, 4] - ego[:, :, 3]
-    torso = torso / np.linalg.norm(torso, axis = 1).reshape(-1, 1)
+    torso = np.tile(np.array([1,0,0]), (z.shape[0], 1))
+    # torso = torso / np.linalg.norm(torso, axis = 1).reshape(-1, 1)
     lateral = np.cross(tors, torso, axis = 1)
     lateral = lateral / np.linalg.norm(lateral, axis = 1).reshape(-1, 1)
     
@@ -882,8 +883,8 @@ def joint_angle(ego, return_rots = False):
     rots["SpineF"] = np.concatenate((-1*tors.reshape(-1, 3, 1), -1*lateral.reshape(-1, 3, 1), torso.reshape(-1, 3, 1)), axis = 2)
     
     # Shoulder rotation matrices are identical to the Spine F basis
-    rots["ShoulderL"] = rots["SpineF"]
-    rots["ShoulderR"] = rots["SpineF"]
+    rots["ShoulderL"] = rots["SpineF"].copy()
+    rots["ShoulderR"] = rots["SpineF"].copy()
 
     ## TODO: assert all rotation matrices have a determinant of +1
 
@@ -914,6 +915,17 @@ def joint_angle(ego, return_rots = False):
 
             # Compute spherical coordinates
             lengths[k], azims[k], elevs[k] = cart2sphere(v_proj[:, 0], v_proj[:, 1], v_proj[:, 2])
+            
+            if apply_correction:
+                mu = np.atan2(np.mean(np.sin(azims[k]), axis = 0), 
+                              np.mean(np.cos(azims[k]), axis = 0))
+                azims[k] -= mu
+                azims[k] = (azims[k] + np.pi) % (2*np.pi) - np.pi
+                x0 = rots[k][:, :, 0].copy()
+                y0 = rots[k][:, :, 1].copy()
+                
+                rots[k][:, :, 0] = np.cos(mu) * x0 + np.sin(mu) * y0
+                rots[k][:, :, 1] = -np.sin(mu) * x0 + np.cos(mu) * y0
 
     if return_rots:
         return lengths, azims, elevs, torsion, rots
