@@ -531,6 +531,7 @@ def _compute_rotation_matrix(z, x_ref):
     x_ref_norm = x_ref / np.column_stack((x_ref_mag, x_ref_mag, x_ref_mag))
     
     y = np.cross(z_norm, x_ref_norm)
+
     y_mag = np.sqrt(y[:, 0]**2 + y[:, 1]**2 + y[:, 2]**2)
     y_norm = y / np.column_stack((y_mag, y_mag, y_mag))
 
@@ -847,10 +848,10 @@ def joint_angle(ego, return_rots = False):
             
             z = k1_t - kv_t
             # torso = ego[:, :, 3] + kv_t
-            x_ref = np.tile(np.array([1, 0, 0]), (z.shape[0], 1))
+            x_ref = np.tile(np.array([1,0,0]), (z.shape[0], 1))
             rot = _compute_rotation_matrix(z, x_ref)
-            rot[:, 0] = -1*rot[:, 0]
-            rot[:, 1] = -1*rot[:, 1]
+            #~ rot[:, 0] = -1*rot[:, 0]
+            #~ rot[:, 1] = -1*rot[:, 1]
             rots[r] = rot
         
     ## rotation matrix for spine m is identity
