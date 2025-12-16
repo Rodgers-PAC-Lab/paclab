@@ -550,7 +550,47 @@ def _compute_rotation_matrix(z, x_ref):
     if np.any(x_ref_mag < 1):
         print("Warning: reference bone is very small!")
     return np.concatenate((x_norm, y_norm, z_norm), axis = 2)
+
+def rodrigues_rotation(v1, v2):
+    '''
+    Compute a rotation matrix using Rodrigues' method given two vectors, which are
+    assumed to be two vectors representing edges at a node along the kinematic
+    chain.
+    TODO: vectorize over a time axis
     
+    Returns R, a rotation matrix
+    '''
+    
+    # Find axis of rotation
+    a = np.cross(v1, v2) / np.linalg.norm(np.cross(v1, v2))
+    
+    # Find angle of rotation (equivalent to flexion angle)
+    theta = np.arccos(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2))
+    
+    # Build cross product matrix of a
+    a_cross = np.array([[0, -a[2] a[1]],
+                        [a[2], 0, -a[0]],
+                        [-a[1], a[0], 0]])
+    # Apply Rodrigues
+    R = np.eye(3) + np.sin(theta) * a_cross + (1 - np.cos(theta)) * np.linalg.matrix_power(a_cross, 2)
+    
+    return R
+    
+def angles_from_rodrigues(R):
+    '''
+    Given a rotation matrix computed with Rodrigues' method from an axis-angle 
+    representation, extract joint angles. Note that these are constrained
+    Euler angles with the arbitrary axial rotation removed.
+    
+    Returns phi, theta measuring the azimuth and flexion at a joint
+    '''
+    
+    phi = np.atan2(R[1, 2], R[0, 2])
+    theta = np.arccos(R[2, 2])
+    
+    return phi, theta
+    
+
 def compute_rotation_matrix(k1, kv, k2):
     '''
     todo: remove this function
