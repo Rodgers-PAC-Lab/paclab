@@ -62,7 +62,7 @@ def load_label3d_data(filename):
         'points_3d': points_3d,
         }
 
-def _parse_camera_parameters(data):
+def _parse_camera_parameters(data, legacy = False):
     """Parse camera params from Label3D data
     
     https://docs.opencv.org/4.x/dc/dbb/tutorial_py_calibration.html
@@ -107,7 +107,11 @@ def _parse_camera_parameters(data):
     for n_cam in range(len(cam_names)):
 
         # The 'scene matrix'
-        K = data['params'][n_cam].item()['K'].item().squeeze()
+        
+        if legacy:
+            K = data['params'][n_cam].item()['K'].item().squeeze()
+        else:
+            K = data['params'][n_cam].item()['K'].item().squeeze().T
         
         # This is RadialDistortion which can apparently be 2-, 3-, or 6- long
         # (ours is 3)
@@ -137,9 +141,18 @@ def _parse_camera_parameters(data):
     big_TDistort = pandas.DataFrame(
         TDistort_l, index=pandas.Series(cam_names, name='camera'))
     big_t = pandas.DataFrame(t_l, index=pandas.Series(cam_names, name='camera'))    
-
+    
+    if legacy:
+        return {
+            'scene_matrix': big_K,
+            'rotation_matrix': big_r,
+            'translation_vector': big_t,
+            'radial_distortion': big_RDistort,
+            'tangential_distortion': big_TDistort,
+            }
+    
     return {
-        'scene_matrix': big_K,
+        'K': big_K,
         'rotation_matrix': big_r,
         'translation_vector': big_t,
         'radial_distortion': big_RDistort,
