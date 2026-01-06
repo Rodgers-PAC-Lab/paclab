@@ -73,7 +73,7 @@ def get_video_timing_metadata(video_filenames, verbose=False):
     
     return df
 
-def _match_videos_with_behavior(video_time, behavior_time, threshold=10):
+def _match_videos_with_behavior(video_time, behavior_time, offset, threshold=10):
     """Align video times and behavior times
     
     Parameters
@@ -84,19 +84,31 @@ def _match_videos_with_behavior(video_time, behavior_time, threshold=10):
     behavior_time : pandas.Series
         index : behavioral session name
         values : time of session
+    offset : int
+        Subtract this many seconds from the video_time, to account for a 
+        fixed offset between the clocks
     threshold : numeric
-        No assignment can be off by more than this many seconds
+        No assignment can be off by more than this many seconds (not including 
+        the `offset`)
     
-    First only behavior times that are within `threshold` seconds of
-    any video time are included. Then scipy.optimize.linear_sum_assignment
-    is used to find the best matching of video_time and behavior_time.
-    Finally asignments that are more than `threshold` seconds apart are dropped.
+    Flow
+    * Subtract `offset` seconds from video_time
+    * Include only behavior times that are within `threshold` seconds of
+      any video time
+    * Use scipy.optimize.linear_sum_assignment to find the best matching of 
+      video_time and behavior_time, based on minimizing "cost" (i.e.,
+      the absolute value of the temporal difference)
+    * Drop asignments with a cost more than `threshold` seconds
     
     Returns : DataFrame, with columns
-        video_filename : filename of vidoe, taken from video_time.index
+        video_filename : filename of video, taken from video_time.index
         session_name : behavioral session name, taken from behavior_time.index
-        cost : the cost of the assignment (difference between the times)    
+        cost : the cost of the assignment (difference between the times) 
+            This is always positive
     """
+    # Apply the offset
+    video_time = video_time - datetime.timedelta(seconds=7)
+    
     # Sometimes there are behavior sessions with no matched video
     # That can really screw up the hungarian because they'll be aligned to
     # something really far away
@@ -132,7 +144,7 @@ def _match_videos_with_behavior(video_time, behavior_time, threshold=10):
     aligned_df = aligned_df[aligned_df['cost'] < threshold]
     return aligned_df
 
-def match_videos_with_behavior(video_dir, session_df, quiet=False):
+def match_videos_with_behavior(video_dir, session_df, quiet=False, threshold=5.5):
     """Match videos with behavior
     
     Loads all video filenames in `video_dir`. Extracts "sandbox_creation_time"
@@ -155,6 +167,9 @@ def match_videos_with_behavior(video_dir, session_df, quiet=False):
         If True, print warnings to stdout
         These are in any case returned in `output_txt`
     
+    threshold : numeric
+        Passed to _match_videos_with_behavior
+    
     
     Returns: aligned_videos_df, output_txt
         aligned_videos_df : DataFrame
@@ -174,9 +189,9 @@ def match_videos_with_behavior(video_dir, session_df, quiet=False):
 
 
     ## Load video timing metadata
-    df = get_video_timing_metadata(video_filenames)
-    video_time = df.set_index('filename')['start']
-
+    timing_df = get_video_timing_metadata(video_filenames)
+    video_time = timing_df.set_index('filename')['start']
+    
 
     ## Align sessions and videos
     # Drop any missing sandbox_creation_time or this won't work
@@ -189,26 +204,42 @@ def match_videos_with_behavior(video_dir, session_df, quiet=False):
         lambda s: datetime.datetime.fromisoformat(s))
 
     # Align
+    # Typically the offset is 7-10 s, with 7s most common and steeply 
+    # declining after 10 s (possible errors)
+    # To avoid too many errors, subtract this mode of 7s, and apply a threshold 
+    # of 3.5 s
+    # Note that costs are always positive and nearly quantized to whole
+    # seconds, either because of quantization in the filename, or because
+    # some process repeats once per second (I notice all video times are
+    # about 150 ms after the whole second mark)
     aligned_df = _match_videos_with_behavior(
-        video_time, behavior_time, threshold=10)
+        video_time, 
+        behavior_time, 
+        offset=7,
+        threshold=threshold,
+        )
 
 
     ## Form aligned_videos_df
     # Store in session_df
-    session_df = session_df.join(
-        aligned_df.set_index('session_name')['video_filename'])
+    session_df = session_df.join(aligned_df.set_index('session_name'))
 
     # Also join video duration
     session_df = session_df.join(
-        df.set_index('filename')['approx_duration_video'], on='video_filename')
+        timing_df.set_index('filename')['approx_duration_video'], 
+        on='video_filename')
 
-    # Include only columns relevant to video analysis (e.g., no stim params)
-    aligned_videos_df = session_df.reset_index()[[
-        'date', 'mouse', 'session_name', 'video_filename', 'approx_duration', 
-        'approx_duration_hdf5', 'approx_duration_video', 'camera_name']
-        ].set_index(['date', 'mouse']).sort_index()
-
+    #~ # Include only columns relevant to video analysis (e.g., no stim params)
+    #~ aligned_videos_df = session_df.reset_index()[[
+        #~ 'date', 'mouse', 'session_name', 'video_filename', 'approx_duration', 
+        #~ 'approx_duration_hdf5', 'approx_duration_video', 'camera_name']
+        #~ ].set_index(['date', 'mouse']).sort_index()
     
+    # Reindex as expected below
+    aligned_videos_df = session_df.reset_index().set_index(
+        ['date', 'mouse']).sort_index()
+
+
     ## If there are duplicate sessions by day, the rest won't work
     if aligned_videos_df.index.duplicated().any():
         output_txt += (
