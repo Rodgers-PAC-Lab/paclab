@@ -581,7 +581,7 @@ def rodrigues_rotation(v1, v2):
     theta = np.arccos(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2))
     
     # Build cross product matrix of a
-    a_cross = np.array([[0, -a[2] a[1]],
+    a_cross = np.array([[0, -a[2], a[1]],
                         [a[2], 0, -a[0]],
                         [-a[1], a[0], 0]])
     # Apply Rodrigues
