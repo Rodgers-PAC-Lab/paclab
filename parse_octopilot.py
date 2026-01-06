@@ -1,7 +1,9 @@
-"""For parsing octopilot files
+"""This module contains functions for parsing octopilot files.
 
+load_session : Load data from a particular session, given a session name
 """
 import os
+import glob
 import datetime
 import scipy.stats
 import numpy as np
@@ -10,12 +12,120 @@ import pandas
 import warnings
 
 def str2dt(s):
-    """Transform string `s` into a datetime in timezone `America/NewYork`"""
+    """Transform string `s` into a datetime in timezone `America/New_York`"""
     tz = pytz.timezone('America/New_York')
     return datetime.datetime.fromisoformat(s).astimezone(tz)
 
-def load_session(octopilot_root, octopilot_session_name, 
-    suppress_order_warnings=False):
+def choose_sandboxes_to_enter(
+    sandbox_root_dir='~/mnt/cuttlefish/behavior/from_clownfish/octopilot/logs', 
+    include_sessions=None, 
+    mouse_names=None, 
+    munged_sessions=None,
+    ):
+    """Identify which sandboxes to enter for a given mouse or session list
+    
+    sandbox_root_dir : str
+        Path to the root directory containing octopilot logs
+        Within `sandbox_root_dir` should be a folder for each year, and
+        within that a folder for each month, and within that a folder for
+        each session (a "sandbox").
+        The sandbox name should be '{dt_string}_{mouse_name}' where
+        `dt_string` is a 19-character string like '2024-10-11_17-26-20'
+    
+    include_sessions, mouse_names, munged_sessions :
+        passed directly from parse_sandboxes, see documentation there
+    
+    Returns: DataFrame
+        columns:
+            full_path : full path to sandbox
+            sandbox_name : name of sandbox (last bit of full_path)
+            sandbox_dt_string, mouse_name : extracted from sandbox_name
+            in_munged : True if in munged_sessions
+            enter_sandbox : True if should be entered
+                This will be True based on include_sessions, mouse_names,
+                and munged_sessions
+    """
+    # Allow a tilde in `sandbox_root_dir`
+    sandbox_root_dir = os.path.expanduser(sandbox_root_dir)
+    
+    # Select only year directories (guards against expensive expansion)
+    year_directories = [
+        s for s in os.listdir(sandbox_root_dir) 
+        if len(s) == 4 and s.startswith('20')]
+    
+    # Error check that there's at least one year directory (guards against
+    # incorrect sandbox root dir)
+    if len(year_directories) == 0:
+        raise IOError(f'no year subdirectories found in {sandbox_root_dir}')
+    
+    # Find all potential sandbox directories ('root/year/month/session/')
+    # The directory must contain trials.csv, which avoids certain edge 
+    # cases like a crash after creating the sandbox or logfile
+    sandbox_dir_l = []
+    for year in year_directories:
+        sandbox_dir_l += glob.glob(
+            os.path.join(sandbox_root_dir, year, '*/*/trials.csv'))
+    
+    # Abspath and remove the final trials.csv
+    def fix(pth):
+        return os.path.split(os.path.abspath(pth))[0]
+    sandbox_dir_l = sorted(map(fix, sandbox_dir_l))
+    
+    # Form DataFrame
+    sandbox_df = pandas.Series(sandbox_dir_l).rename('full_path').to_frame()
+    
+    # Extract sandbox name
+    # This works because of abspath above
+    sandbox_df['sandbox_name'] = sandbox_df['full_path'].apply(
+        lambda s: os.path.split(s)[1])
+    
+    # Extract sandbox_dt_string and mouse name
+    # This works because dt_string is always 19 chars long
+    sandbox_df['sandbox_dt_string'] = sandbox_df['sandbox_name'].str[:19]
+    sandbox_df['mouse_name'] = sandbox_df['sandbox_name'].str[20:]
+    
+    # Error checks
+    assert not (sandbox_df['mouse_name'] == '').any()
+    assert not sandbox_df['mouse_name'].isnull().any()
+    
+    # Decide whether to include via `include_sessions` or `mouse_names`
+    # It's not clear what makes sense if both are specified, so in that
+    # case just ignore `mouse_names`.
+    if include_sessions is not None:
+        # In this case, include only the requested sessions
+        sandbox_df['enter_sandbox'] = sandbox_df['sandbox_name'].isin(
+            include_sessions)
+    
+    elif mouse_names is not None:
+        # In this case, include all sessions from these mice
+        sandbox_df['enter_sandbox'] = sandbox_df['mouse_name'].isin(
+            mouse_names)
+    
+    else:
+        # While technically they may want to load everything, in practice
+        # this is much more likely to be a mistake
+        raise ValueError(
+            "at least one of `include_sessions` or `mouse_names` "
+            "must be specified")
+
+    # Identify munged
+    if munged_sessions is not None:
+        sandbox_df['in_munged'] = sandbox_df['sandbox_name'].isin(
+            munged_sessions)
+    else:
+        sandbox_df['in_munged'] = np.zeros(len(sandbox_df), dtype=bool)
+
+    # Mask "enter_sessions" by not "in_munged"
+    sandbox_df['enter_sandbox'] = (
+        sandbox_df['enter_sandbox'] & ~sandbox_df['in_munged'])
+    
+    return sandbox_df
+
+def load_session(
+    octopilot_root='~/mnt/cuttlefish/behavior/from_clownfish/octopilot/logs', 
+    octopilot_session_name=None, 
+    suppress_order_warnings=False,
+    ):
     """Load data from octopilot session
     
     octopilot_root : str
@@ -76,6 +186,10 @@ def load_session(octopilot_root, octopilot_session_name,
             session start. Session start is defined as 
             trials['start_time'].iloc[0]
     """
+    ## Error check
+    if octopilot_session_name is None:
+        raise ArgumentError('octopilot session name cannot be None')
+    
     ## Form session dir
     octopilot_year, octopilot_month = octopilot_session_name.split('-')[:2]
     octopilot_session_dir = os.path.join(
@@ -85,6 +199,9 @@ def load_session(octopilot_root, octopilot_session_name,
     ## Load behavior data
     # Klooge
     if os.path.exists(os.path.join(octopilot_session_dir, 'trials.csv.fixed')):
+        print(
+            f'warning: {octopilot_session_name} filename ending in *.fixed '
+            'found, using that one')
         sounds = pandas.read_table(
             os.path.join(octopilot_session_dir, 'sounds.csv.fixed'), sep=',')
         sound_plans = pandas.read_table(
@@ -172,6 +289,11 @@ def load_session(octopilot_root, octopilot_session_name,
 
     
         if flashes is not None:
+            ## Error check no duplicates
+            if (flashes.groupby(['trial_number', 'rpi']).size() > 1).any():
+                raise ValueError(
+                    f'non-unique flashes in {octopilot_session_name}')
+            
             ## Put rpi on columns of flashes
             flashes = flashes.set_index(
                 ['trial_number', 'rpi'])['flash_time'].unstack('rpi')
@@ -293,8 +415,7 @@ def sync_sounds(sounds, octopilot_session_name, suppress_order_warnings=False):
         n_out_of_order = np.sum(diff_time < 0)
         if n_out_of_order > 0 and not suppress_order_warnings:
             print(
-                "warning: {} rows of sounds_played_df ".format(n_out_of_order) +
-                f"in session {octopilot_session_name} " +
+                f"warning: {octopilot_session_name}: {n_out_of_order} rows of sounds_played_df "
                 "out of order by at worst {} frames".format(diff_time.min())
                 )
         
@@ -310,11 +431,11 @@ def sync_sounds(sounds, octopilot_session_name, suppress_order_warnings=False):
         # If not, probably an xrun or jack restart occurred
         # It appears the true sampling rate of the Hifiberry is ~192002 +/- 1
         # 1/pilot2jack_frame2session_time[pilot].slope
-        if (1 - pilot2jack_frame2session_time[pilot].rvalue) > 1e-9:
-            print("warning: rvalue was {:.3f} on {}".format(
+        if (1 - pilot2jack_frame2session_time[pilot].rvalue) > 1e-8:
+            print("warning: {}: rvalue was {:.9f} on {}".format(
+                octopilot_session_name,
                 pilot2jack_frame2session_time[pilot].rvalue,
                 pilot))
-            print("speaker_time_in_session will be inaccurate")
 
         # Store the version with times fixed for wraparound
         new_sounds_played_df_l.append(subdf)
