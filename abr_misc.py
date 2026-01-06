@@ -3,6 +3,8 @@
 import numpy as np
 import pandas
 import socket
+import os
+import json
 
 def get_metadata(data_directory, datestring, metadata_version):
     """Get the metadata from a day of recordings
