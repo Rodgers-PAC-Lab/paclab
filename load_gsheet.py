@@ -33,6 +33,12 @@ def load(doc_id, sheet_name=None, normalize_case=True):
 
     # Get data
     request_data = requests.get(url)
+    
+    # Error check
+    if not request_data.ok:
+        raise ValueError(
+            f'could not load gsheet {doc_id}; '
+            f'status {request_data.status_code}; is it publicly shared?')
 
     # Parse each sheet into a dict
     res_d = {}
@@ -497,3 +503,7 @@ def cedric_ad_sheet(drop_long_columns=True):
     
     return df
     
+def munged_sessions():
+    """Return the list of munged sessions"""
+    sheet = load('1gOlX4hvBkH_MmcGBmANqQg8sLBrOivs_S_ZB7BUfqD8')
+    return sheet
