@@ -10,6 +10,7 @@ import numpy as np
 import pytz
 import pandas
 import warnings
+import ast
 
 def str2dt(s):
     """Transform string `s` into a datetime in timezone `America/New_York`"""
@@ -180,24 +181,94 @@ def load_session(
             Columns: poke_time, trial_number, rpi, poked_port, rewarded
         
         'flashes': DataFrame
-            One row per trial
-            Columns: rpi names
-            Values: The datetime at which each rpi flashed
+            Index: trial_number * rpi
+            Columns: dt, relative
+            'dt': The datetime at which each rpi flashed
+            'relative': (float) number of seconds since session start
+            Session start is defined as trials['start_time'].iloc[0]
         
-        'flash_wrt_session_start': DataFrame
-            Same as 'flashes', except the values are number of seconds since
-            session start. Session start is defined as 
-            trials['start_time'].iloc[0]
+        'box_params': dict with keys
+        
+        'mouse_params': dict with keys
+        
+        'task_params': dict with keys
+        
+        'connected_pis': DataFrame
+            This information comes from box_params but is popped out to 
+            avoid nesting.
+            Index: 'name' which is the rpi
+            Columns: 'ip', 'left_port_position', 'right_port_position',
+                'left_port_name', 'right_port_name'
     """
     ## Error check
     if octopilot_session_name is None:
         raise ArgumentError('octopilot session name cannot be None')
     
+    
     ## Form session dir
     octopilot_year, octopilot_month = octopilot_session_name.split('-')[:2]
     octopilot_session_dir = os.path.join(
-        octopilot_root, octopilot_year, octopilot_month, octopilot_session_name)
+        os.path.expanduser(octopilot_root), 
+        octopilot_year, 
+        octopilot_month, 
+        octopilot_session_name)
 
+    
+    ## Load config from logfile
+    # Ideally we would be storing box_params, task_params, mouse_params as files
+    # in the directory. Because we're not, grab them from the logfile instead. 
+    # Load the first bit of the logfile
+    logfile_path = os.path.join(octopilot_session_dir, 'logfile')
+    with open(logfile_path) as fi:
+        lines = fi.readlines(4000) # bytes, approx
+    
+    # The first 1-2 lines are INFO lines, possibly identifying the camera
+    line_contains_info = [line.startswith('[INFO]') for line in lines]
+    n_info_lines = np.sum(line_contains_info[:5])
+    
+    # Parse camera_name if it was provided
+    # This turns out to be unnecessary since the camera in box_params is more
+    # likely to be accurate (not always specified here)
+    if n_info_lines == 1:
+        assert lines[0] == '[INFO] - Initializing Dispatcher with the following params:\n'
+        camera_name = None
+    
+    elif n_info_lines == 2:
+        if lines[0] == '[INFO] - warning: no camera specified\n':
+            camera_name = None
+        
+        elif lines[0].startswith('[INFO] - will use camera '):
+            camera_name = lines[0].strip()[25:]
+        
+        else:
+            raise ValueError(
+                f'malformed line 0 in {logfile_path}: {lines[0].strip()}')
+    
+    else:
+        raise ValueError(f'unusual number of info lines in {logfile_path}')
+    
+    # The next three lines encode box, task, and mouse params
+    # Note that there is a trailing semicolon to drop
+    # Parse the box params
+    assert lines[n_info_lines].startswith('box_params: ')
+    box_params_s = lines[n_info_lines].strip()[12:-1]
+    box_params = ast.literal_eval(box_params_s)
+    
+    # Parse the task params
+    assert lines[n_info_lines + 1].startswith('task_params: ')
+    task_params_s = lines[n_info_lines + 1].strip()[13:-1]
+    task_params = ast.literal_eval(task_params_s)
+    
+    # Parse the mouse params
+    assert lines[n_info_lines + 2].startswith('mouse_params: ')
+    mouse_params_s = lines[n_info_lines + 2].strip()[14:-1]
+    mouse_params = ast.literal_eval(mouse_params_s)    
+
+    # In some cases box_params['camera'] is None and sometimes ''
+    # Make it uniformly None
+    if 'camera' in box_params and box_params['camera'] == '':
+        box_params['camera'] = None
+    
 
     ## Load behavior data
     # Allow "fixing" - if trials.csv.fixed exists, load that one instead
@@ -233,7 +304,7 @@ def load_session(
         pokes = pandas.read_table(
             os.path.join(octopilot_session_dir, 'pokes.csv'), sep=',')
 
-        # TODO: does this still happen?
+        # This file now seems to always exist, so this try/except is optional
         try:
             flashes = pandas.read_table(
                 os.path.join(octopilot_session_dir, 'flashes.csv'), sep=',', 
@@ -327,8 +398,13 @@ def load_session(
             session_start_time).apply(
             lambda ser: ser.dt.total_seconds())
 
-    else:
-        flash_wrt_session_start = None
+        # Concat these two similar ones
+        flashes = pandas.concat(
+            [flashes, flash_wrt_session_start], 
+            axis=1, keys=['dt', 'relative'], names=['typ'])
+
+        # Stack because the columns differ across boxes
+        flashes = flashes.stack(future_stack=True)
 
 
     ## Sync the sounds and the sound plans
@@ -355,6 +431,11 @@ def load_session(
         sounds = None
     
 
+    ## Pop this dict out
+    connected_pis = box_params.pop('connected_pis')
+    connected_pis = pandas.DataFrame(connected_pis).set_index('name')
+    
+
     ## Return
     return {
         'sounds': sounds,
@@ -362,7 +443,10 @@ def load_session(
         'trials': trials,
         'pokes': pokes,
         'flashes': flashes,
-        'flash_wrt_session_start': flash_wrt_session_start,
+        'box_params': box_params,
+        'mouse_params': mouse_params,
+        'task_params': task_params,
+        'connected_pis': connected_pis,
         }
 
 def sync_sounds(sounds, octopilot_session_name, suppress_order_warnings=False):
