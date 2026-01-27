@@ -188,10 +188,14 @@ def load_session(
             Session start is defined as trials['start_time'].iloc[0]
         
         'box_params': dict with keys
-        
-        'mouse_params': dict with keys
+            'zmq_port', 'bonsaid_port', 'desktop_ip', 'bonsai_ip',
+            'ypos_of_gui', 'camera', 'name'
         
         'task_params': dict with keys
+            'name', and whatever else is in the task_params.json
+        
+        'mouse_params': dict with keys
+            'reward_value', 'box', 'task', 'name'
         
         'connected_pis': DataFrame
             This information comes from box_params but is popped out to 
