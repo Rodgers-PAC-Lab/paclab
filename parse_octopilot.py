@@ -358,7 +358,10 @@ def load_session(
 
 
     ## Define session_start_time
-    if len(trials) >= 1:
+    if len(trials) == 0:
+        print(f'warning: session {octopilot_session_name} has zero trials')
+
+    else:
         # Take the time of the first trial on the desktop
         # It doesn't really matter whether this is the same time on all of the
         # other pis. This is just a point of reference to convert datetimes to floats
@@ -372,67 +375,64 @@ def load_session(
         sounds['message_time_s'] = (
             sounds['message_time'] - session_start_time).dt.total_seconds()
 
-    else:
-        print(f'warning: session {octopilot_session_name} has zero trials')
-
     
-    ## Define flash_wrt_session_start
-    if flashes is not None:
-        # Error check no duplicates
-        if (flashes.groupby(['trial_number', 'rpi']).size() > 1).any():
-            raise ValueError(
-                f'non-unique flashes in {octopilot_session_name}')
-        
-        # Put rpi on columns of flashes
-        flashes = flashes.set_index(
-            ['trial_number', 'rpi'])['flash_time'].unstack('rpi')
+        ## Define flash_wrt_session_start
+        if flashes is not None and session_start_time is not None:
+            # Error check no duplicates
+            if (flashes.groupby(['trial_number', 'rpi']).size() > 1).any():
+                raise ValueError(
+                    f'non-unique flashes in {octopilot_session_name}')
+            
+            # Put rpi on columns of flashes
+            flashes = flashes.set_index(
+                ['trial_number', 'rpi'])['flash_time'].unstack('rpi')
 
-        # The start times according to the desktop
-        trial_start_times_clock = trials['start_time']
+            # The start times according to the desktop
+            trial_start_times_clock = trials['start_time']
 
-        # The flash times on each rpi, wrt trial_start_time
-        # This is never negative, peaks at 10ms, generally <20ms, 
-        # but very long tail out to 100ms
-        flash_wrt_trial_start = flashes.sub(
-            trial_start_times_clock, axis=0).apply(
-            lambda ser: ser.dt.total_seconds())
+            # The flash times on each rpi, wrt trial_start_time
+            # This is never negative, peaks at 10ms, generally <20ms, 
+            # but very long tail out to 100ms
+            flash_wrt_trial_start = flashes.sub(
+                trial_start_times_clock, axis=0).apply(
+                lambda ser: ser.dt.total_seconds())
 
-        # The flash times on each rpi, wrt session_start_time
-        flash_wrt_session_start = flashes.sub(
-            session_start_time).apply(
-            lambda ser: ser.dt.total_seconds())
+            # The flash times on each rpi, wrt session_start_time
+            flash_wrt_session_start = flashes.sub(
+                session_start_time).apply(
+                lambda ser: ser.dt.total_seconds())
 
-        # Concat these two similar ones
-        flashes = pandas.concat(
-            [flashes, flash_wrt_session_start], 
-            axis=1, keys=['dt', 'relative'], names=['typ'])
+            # Concat these two similar ones
+            flashes = pandas.concat(
+                [flashes, flash_wrt_session_start], 
+                axis=1, keys=['dt', 'relative'], names=['typ'])
 
-        # Stack because the columns differ across boxes
-        flashes = flashes.stack(future_stack=True)
+            # Stack because the columns differ across boxes
+            flashes = flashes.stack(future_stack=True)
 
 
-    ## Sync the sounds and the sound plans
-    # TODO: handle the case where sounds is empty (should not be happening
-    # that often, but did in early 2025). An edge case is when there are
-    # some sounds but not enough to correctly calculate the sync between
-    # rpi clock and desktop clock
-    if len(sounds) > 0:
-        # This call is a little slow, but most of the running time is
-        # dominated by reading the text files above
-        sounds = sync_sounds(
-            sounds, octopilot_session_name, 
-            suppress_order_warnings=suppress_order_warnings)
+        ## Sync the sounds and the sound plans
+        # TODO: handle the case where sounds is empty (should not be happening
+        # that often, but did in early 2025). An edge case is when there are
+        # some sounds but not enough to correctly calculate the sync between
+        # rpi clock and desktop clock
+        if len(sounds) > 0:
+            # This call is a little slow, but most of the running time is
+            # dominated by reading the text files above
+            sounds = sync_sounds(
+                sounds, octopilot_session_name, 
+                suppress_order_warnings=suppress_order_warnings)
 
-        # Join sound plans onto sounds
-        if sound_plans is not None:
-            sounds, sound_plans = join_sound_plans_on_sounds(
-                sounds, sound_plans)
+            # Join sound plans onto sounds
+            if sound_plans is not None:
+                sounds, sound_plans = join_sound_plans_on_sounds(
+                    sounds, sound_plans)
+
+            else:
+                print(f'warning: no sound plan in {session_name}')
 
         else:
-            print(f'warning: no sound plan in {session_name}')
-
-    else:
-        sounds = None
+            sounds = None
     
 
     ## Pop this dict out
