@@ -427,6 +427,22 @@ def load_session(
             if sound_plans is not None:
                 sounds, sound_plans = join_sound_plans_on_sounds(
                     sounds, sound_plans)
+                
+                # Error check
+                # Compute number of sounds per trial that are off (0.1 ms)
+                bad_sounds_per_trial = sounds[
+                    sounds['last_sounds'] == False].groupby(
+                    'trial_number')['bad_diff'].sum()
+                
+                # Compute bad trials
+                bad_trials = bad_sounds_per_trial > 0
+                
+                # Warn
+                if bad_trials.any():
+                    print(
+                        f'warning: {octopilot_session_name}: '
+                        f'sound_plans misaligned on {bad_trials.sum()} trials '
+                        f'for {bad_sounds_per_trial.loc[bad_trials].sum()} sounds')                
 
             else:
                 print(f'warning: no sound plan in {session_name}')
@@ -484,7 +500,8 @@ def sync_sounds(sounds, octopilot_session_name, suppress_order_warnings=False):
     
     Returns: DataFrame
         This is `sounds` with a few columns added, notably 'speaker_time_s'.
-        The order of the rows is likely different.
+        The order of the rows is likely different. They will be ordered
+        first by rpi and then by message_time.
     """
     ## Account for buffering delay
     # This is mostly from paclab.parse.load_sounds_played
@@ -538,13 +555,20 @@ def sync_sounds(sounds, octopilot_session_name, suppress_order_warnings=False):
             subdf.loc[fix_mask, 'speaker_frame'] += 2 ** 32
         
         # Error check ordering
-        # Not sure why this happens, but sometimes two sounds are played in
-        # the same frame
-        diff_time = np.diff(subdf['message_frame'])
+        # On occasion, two messages are sent in the same cycle, which should
+        # not happen. In this case, the `message_frame` order may not be
+        # the same as `message_time` order, for some reason. In any case,
+        # `speaker_frame` will be the same. These types of erroneous sounds
+        # will later be dropped in sync_sounds_with_sound_plans
+        #
+        # Do warn on on any negative diff(speaker_frame) (as opposed to zero),
+        # which indicates a more serious out-of-order issue
+        diff_time = np.diff(subdf['speaker_frame'])
         n_out_of_order = np.sum(diff_time < 0)
         if n_out_of_order > 0 and not suppress_order_warnings:
             print(
-                f"warning: {octopilot_session_name}: {n_out_of_order} rows of sounds_played_df "
+                f"warning: {octopilot_session_name}: "
+                f"{n_out_of_order} rows of sounds_played_df "
                 "out of order by at worst {} frames".format(diff_time.min())
                 )
         
@@ -571,11 +595,12 @@ def sync_sounds(sounds, octopilot_session_name, suppress_order_warnings=False):
 
     # Reconstruct sounds DataFrame
     # message_frame and speaker_frame are now int64 and wraparound-free
+    # We sort by message_time because that is unambiguous (cannot receive
+    # two messages at the same time), though note that this doesn't guarantee
+    # ordering by message_frame. It will likely still be ordered by 
+    # speaker_frame, because that is rounded to cycle boundaries.
     sounds = pandas.concat(new_sounds_played_df_l).sort_values('message_time')
 
-    # Add a column for diff between frames, useful for detecting continuations
-    sounds['speaker_frame_diff'] = sounds['speaker_frame'].diff()
-        
     # Use that fit to estimate when the sound played in the session timebase
     speaker_time_l = []
     for pilot, subdf in sounds.groupby('rpi'):
@@ -620,6 +645,12 @@ def join_sound_plans_on_sounds(sounds, sound_plans):
             'n_sound': a cumcount of sound within each trial * rpi
             'n_sound_plan' : matched to the column in `sound_plans`
             'side', 'gap_chunks': from `sound_plans`
+            'est_diff': computed from 'gap_chunks', the expected temporal
+                difference between sounds in the plan
+            'err_diff': the actual diff between sounds
+            'bad_diff': True whenver err_diff is > 0.1 ms
+            'last_sounds': True for the last two sounds of each trial, for
+                which errors are not uncommon
             
             This DataFrame is indexed by trial_number * rpi * n_sound
             
@@ -630,16 +661,43 @@ def join_sound_plans_on_sounds(sounds, sound_plans):
     ## Keep a copy for debugging
     orig_sounds = sounds.copy()
     
+    # Error check they are sorted in time
+    # This not..any correctly handles the null in diff
+    assert not (sounds['speaker_time_s'].diff() < 0).any()
+    
+    
+    ## Drop sounds that occurred too close together
+    # Compute the temporal difference in speaker sounds
+    # The diff on trial N is the time between N-1 and N, which is opposite
+    # the convention for "gap" below
+    # But this is convenient for dropping the continuation sounds
+    sounds['speaker_frame_diff'] = sounds['speaker_frame'].diff()
+    
+    # Drop continuation sounds
+    # These are expected and normal and occur on the second frame of every sound
+    # These are indicated by a diff of 1024 (one frame)
+    sounds = sounds[sounds['speaker_frame_diff'] != 1024].copy()
 
-    ## Drop continuation sounds 
-    # TODO: handle the case where this drops a real sound, because of a glitch
-    # or some edge case around end of trial
-    sounds = sounds[sounds['speaker_frame_diff'] != 1024].drop(
-        'speaker_frame_diff', axis=1)
+    # Recompute diff (now excluding continuation sounds)
+    sounds['speaker_frame_diff'] = sounds['speaker_frame'].diff()
 
-    # Recalculate diff time after continuation sounds dropped
+    # Drop aberrant 2-frame diffs (10 ms), so one sound beginning as soon
+    # as the previous one ended. 
+    # This is theoretically fine but we never actually deliver sounds with
+    # this ISI, so it must be an error
+    # This sometimes affects the last sound of two of the trial, but it also
+    # affects earlier sounds reasonably often
+    sounds = sounds[sounds['speaker_frame_diff'] != 2048]
+
+    # Drop simultaneous sounds
+    # I think this might only happen around the end of a trial, but certainly
+    # it's not possible for two sounds to occur at the same time
+    sounds = sounds.drop_duplicates(subset=['speaker_time_s'], keep=False)
+
+    # Recalculate diff time after these drops (now in seconds instead of frames)
     # Use this shift so that diff_speaker_time_s is the gap time after each sound,
     # not before, so it matches sound_plan
+    sounds = sounds.drop('speaker_frame_diff', axis=1)
     sounds['diff_speaker_time_s'] = sounds['speaker_time_s'].diff().shift(-1)
 
     
@@ -677,61 +735,70 @@ def join_sound_plans_on_sounds(sounds, sound_plans):
         validate='m:1',
         )
 
+    # Error check
     # The only allowable null value is the last entry in diff_speaker_time_s
     assert not sounds.drop('diff_speaker_time_s', axis=1).isnull().any().any()
     assert not sounds['diff_speaker_time_s'].iloc[:-1].isnull().any()
 
-    # Drop 'gap' and 'time', because only 'gap_chunks' (a quantized approximation
+
+    ## Recompute gaps and diffs
+    # Drop 'gap' and 'time'. Only 'gap_chunks' (a quantized approximation
     # of 'gap') matters, because that is what was used to generate the sound
     sounds = sounds.drop(['gap', 'time', 'len_plan'], axis=1)
 
+    # Compute the expected temporal difference between sounds
+    # This assumes that the duration of the sound is 2 chunks!
+    sounds['est_diff'] = (sounds['gap_chunks'] + 2) * 1024 / 192000
 
-    ## Error check that gap_chunks matches diff_speaker_time_s
-    # TODO: this is quite often wrong, need to fix
+    # Compute the error in the estimate
+    # typical median abs(error) is ~2 us
+    sounds['err_diff'] = sounds['diff_speaker_time_s'] - sounds['est_diff']
     
-    # Reindex
-    sounds = sounds.set_index(['trial_number', 'rpi', 'n_sound'])
-    sound_plans = sound_plans.set_index(['trial_number', 'rpi', 'n_sound_plan'])
+    # Compute "bad sounds" (those off by 1 frame or more)
+    # Note that this just means they are off from the plan
+    # It may be that the logged speaker_time_s is still correct, which means
+    # all downstream code can still analyze them
+    sounds['bad_diff'] = sounds['err_diff'].abs() > 1e-4
     
-    # For this error check, exclude the last sound of each trial, because on
+
+    ## Reindex
+    sounds = sounds.set_index(
+        ['trial_number', 'rpi', 'n_sound']).sort_index()
+    sound_plans = sound_plans.set_index(
+        ['trial_number', 'rpi', 'n_sound_plan']).sort_index()
+
+    
+    ## Label "last sounds" per trial
+    # We expect the gap to be off on the last sound of each trial, because on
     # those sounds the next sound never occurred, and an ITI happened instead
-    index_of_last_sound_per_trial = sounds.groupby(
+    # It is also possible for the gap to be off for the second-to-last sound
+    # of the trial, because sometime an erroneous sound is inserted (I think)
+    # So don't consider the last two
+    index_of_last_sounds_per_trial = sounds.groupby(
         ['trial_number', 'rpi']).apply(
         lambda df: df.iloc[-2:].droplevel(['trial_number', 'rpi'])
         ).index
+    sounds['last_sounds'] = False
+    sounds.loc[index_of_last_sounds_per_trial, 'last_sounds'] = True
 
-    # Drop the last sound of each trial
-    to_check = sounds.drop(index_of_last_sound_per_trial)
-    
-    # Also exclude any trial where the gap_chunks was 1, because I think
-    # this doesn't work properly
-    # TODO: fix this
-    min_gap_chunk = sound_plans.groupby('trial_number')['gap_chunks'].min()
-    drop_trials = min_gap_chunk.index[min_gap_chunk.values == 1]
 
-    # Drop the trials with min_gap_chunk == 1
-    # ignore errors because it may already have been dropped above
-    to_check = to_check.drop(drop_trials, errors='ignore')
+    ## Error check
+    # These checks have been moved upstream, but keep them here in case
+    # we need to introduce a breakpoint
     
-    # Compute the estimate time between sounds
-    # This assumes that the duration of the sound is 2 chunks!
-    to_check['est_diff'] = (to_check['gap_chunks'] + 2) * 1024 / 192000
+    #~ # Compute number of sounds per trial that are extremely off (0.1 ms)
+    #~ bad_sounds_per_trial = sounds[
+        #~ sounds['last_sounds'] == False].groupby('trial_number')['bad_diff'].sum()
     
-    # Compute the error in the estimate
-    # typical median abs(error) is ~2 us
-    to_check['err'] = to_check['diff_speaker_time_s'] - to_check['est_diff']
-
-    # Compute fraction of sounds that are extremely off (0.1 ms)
-    # This appears to be pretty accurate in most cases, but sometimes off for
-    # the last sound in each trial (even after dropping the actual last above)
-    bad_trials = (to_check['err'].abs() > 1e-4).groupby('trial_number').any()
+    #~ # Compute bad trials
+    #~ bad_trials = bad_sounds_per_trial > 0
     
-    # This is off so often that it's not worth warning about
+    #~ # This is off so often that it's not worth warning about
     #~ # Warn
-    #~ if bad_trials.sum() > 1:
+    #~ if bad_trials.any():
         #~ print(
-            #~ f'warning: sound_plans does not align well with sounds on '
-            #~ f'{bad_trials.sum()} / {len(bad_trials)} trials')
+            #~ f'warning: sound_plans misaligned on these trials:\n'
+            #~ f'{bad_sounds_per_trial.loc[bad_trials]}')
     
     return sounds, sound_plans
     
