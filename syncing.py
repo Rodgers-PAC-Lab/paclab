@@ -879,6 +879,7 @@ def fit_analog_flash_to_behavior_flash(
         'b2a_intercept': behavior2analog_fit_rpi01.intercept,
         'std_resids': std_resids,
         'max_resids': max_resids,
+        'resids': resids,
         }
 
 def compose_fit(p1, p2):
