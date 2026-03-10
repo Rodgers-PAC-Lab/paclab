@@ -438,7 +438,7 @@ def load_session(
                 bad_trials = bad_sounds_per_trial > 0
                 
                 # Warn
-                if bad_trials.any():
+                if bad_trials.any() and not suppress_order_warnings:
                     print(
                         f'warning: {octopilot_session_name}: '
                         f'sound_plans misaligned on {bad_trials.sum()} trials '
