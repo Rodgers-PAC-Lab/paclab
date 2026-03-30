@@ -194,7 +194,7 @@ def extract_duration_of_onsets2(onsets, offsets):
 
 def longest_unique_fit(xdata, ydata, start_fitlen=3, ss_thresh=.0003,
     verbose=True, x_midslice_start=None, return_all_data=False,
-    refit_data=False):
+    already_aligned=False):
     """Find the longest consecutive string of fit points between x and y.
 
     We start by taking a slice from xdata of length `start_fitlen` 
@@ -226,13 +226,6 @@ def longest_unique_fit(xdata, ydata, start_fitlen=3, ss_thresh=.0003,
         By default, this is the midpoint of `xdata`.
     return_all_data : boolean
         Return x_start, y_start, etc.
-    refit_data : boolean, only matters if return_all_data = True
-        Once the best xvy is determined, do a last refit on the maximum
-        overlap of xdata and ydata.  Useful because normally execution
-        stops when we run out of data (on either end) or when a bad point
-        is reached. However, this will fail badly if either xdata or ydata
-        contains spurious datapoints (i.e., concatenated from another 
-        session).
     
     Returns: a linear polynomial fitting from Y to X.
         Or if return_all_data, also returns the start and stop indices
@@ -247,17 +240,26 @@ def longest_unique_fit(xdata, ydata, start_fitlen=3, ss_thresh=.0003,
     best_fitpoly = None
 
     if verbose:
-        print("begin with fitlen", fitlen)
+        if already_aligned:
+            print('already aligned, using all data')
+        else:
+            print("begin with fitlen", fitlen)
 
     while keep_going:        
         # Slice out xdata
         chosen_idxs = xdata[x_midslice_start - fitlen:x_midslice_start + fitlen]
         
-        # Check if we ran out of data
-        if len(chosen_idxs) != fitlen * 2:
-            if verbose:
-                print("out of data, breaking")
-            break
+        # Optionally overrule
+        if already_aligned:
+            chosen_idxs = xdata
+        else:
+            # Check if we ran out of data
+            if len(chosen_idxs) != fitlen * 2:
+                if verbose:
+                    print("out of data, breaking")
+                break
+
+        # Break on nan data
         if np.any(np.isnan(chosen_idxs)):
             if verbose:
                 print("nan data, breaking")
@@ -288,7 +290,7 @@ def longest_unique_fit(xdata, ydata, start_fitlen=3, ss_thresh=.0003,
         
         # Look at results
         rdf = pandas.DataFrame.from_records(rec_l).set_index('idx').dropna()
-
+        
         # Keep only those under thresh
         rdf = rdf[rdf['ss'] < ss_thresh * len(chosen_idxs)]    
 
@@ -305,14 +307,18 @@ def longest_unique_fit(xdata, ydata, start_fitlen=3, ss_thresh=.0003,
         best_fitpoly = rdf['fitpoly'].loc[best_index]
         if verbose:
             fmt = "fitlen=%d. best fit: x=%d, y=%d, xvy=%d, " \
-                "ss=%0.3g, poly=%0.4f %0.4f"
+                "ss=%0.6g, poly=%0.4f %0.4f"
             print(fmt % (fitlen, x_midslice_start - fitlen, best_index, 
                 x_midslice_start - fitlen - best_index, 
-                best_ss // len(chosen_idxs), best_fitpoly[0], best_fitpoly[1]))
-
+                best_ss / len(chosen_idxs), best_fitpoly[0], best_fitpoly[1]))
+        
         # Increase the size
         last_good_fitlen = fitlen
         fitlen = fitlen + 1    
+        
+        # Break if already_aligned
+        if already_aligned:
+            break
     
     # Always return None if no fit found
     if best_fitpoly is None:
@@ -328,13 +334,20 @@ def longest_unique_fit(xdata, ydata, start_fitlen=3, ss_thresh=.0003,
             'best_fitpoly': best_fitpoly,
             'xdata': xdata,
             'ydata': ydata,
+            'rdf': rdf,
+            'last_good_fitlen': last_good_fitlen,
         }            
         
-        # Optionally refit to max overlap
-        if refit_data:
-            fitdata = refit_to_maximum_overlap(xdata, ydata, fitdata)
+        # Optionally overwrite
+        if already_aligned:
+            fitdata['x_start'] = 0
+            fitdata['x_stop'] = len(xdata)
+            fitdata['y_start'] = 0
+            fitdata['y_stop'] = len(ydata)
+            assert len(xdata) == len(ydata)
         
         return fitdata
+
     else:
         return best_fitpoly
 
@@ -879,6 +892,7 @@ def fit_analog_flash_to_behavior_flash(
         'b2a_intercept': behavior2analog_fit_rpi01.intercept,
         'std_resids': std_resids,
         'max_resids': max_resids,
+        'resids': resids,
         }
 
 def compose_fit(p1, p2):

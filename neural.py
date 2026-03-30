@@ -123,6 +123,141 @@ def convert_dataflow_to_channel_map(dataflow):
     
     return ks_json
 
+def find_logger_and_check_xml(session_name, verbose=True):
+    """Find the logger and load and check XML data
+    
+    Arguments
+    ---
+    * session_name : name of neural session to find
+    * verbose : bool
+        If True warnings will be printed
+        Either way they will be returned as 'warning_text' and 'warn'
+    
+    Workflow
+    ---
+    * Search through a list of potential directories and find the logger
+      using paclab.neural.find_logger
+    * Try to load the XML data using load_metadata_from_xml (or raise
+      ValueError if this doesn't work)
+    * Parse XML data and check for common problems
+    
+    Raises: ValueError if cannot load XML data
+    
+    Returns: dict with keys
+        'logger_name': string
+        'xml_file': full path to xml_file
+        'xml_data': dict returned by load_metadata_from_xml
+        'warn': True if a warning was encountered
+        'warning_text': string of warning text, or '' if warn == False
+        'channel_count': int
+        'neural_fs': float
+    """
+    
+    ## Places to search for raw data
+    # Neural data for raw data
+    neural_root_l = [   
+        os.path.expanduser('~/mnt/cuttlefish/whitematter/20241125_HSW'),
+        os.path.expanduser('~/mnt/cuttlefish/whitematter_D/20250407_HSW_Control'),
+        os.path.expanduser('~/mnt/cuttlefish/whitematter_D/whitematter/20250407_HSW_Control'),
+        os.path.expanduser('~/mnt/cuttlefish/whitematter_D/HSW_Ostim_donotuse'),
+        os.path.expanduser('~/mnt/cuttlefish/whitematter/2024_10_HSWsoftware'),
+        os.path.expanduser('~/mnt/cuttlefish/whitematter/HSW software'),
+        ]
+    
+    
+    ## Keep track of whether a warning was encountered
+    warn = False
+    warning_text_l = []
+    
+    
+    ## Figure out which logger it's on
+    # This will try all neural roots to find it
+    # TODO: check if found in multiple
+    logger_name = None
+    for neural_root in neural_root_l:
+        try:
+            logger_name = find_logger(neural_root, session_name)
+            break
+
+        except FileNotFoundError:
+            pass
+
+    # Warn if not found
+    if logger_name is None:
+        raise ValueError(f"cannot find {session_name} in any neural_root")
+
+    
+    ## Load xml metadata
+    try:
+        xml_file, xml_data = load_metadata_from_xml(
+            neural_root, logger_name, session_name)
+    
+    except FileNotFoundError:
+        raise ValueError(f'CRITICAL ERROR: no xml file found for {session_name}')
+    
+    except IOError as e:
+        # This happens with, eg, blank XML files
+        raise ValueError(f'CRITICAL ERROR while loading xml for {session_name}: {e}')
+
+    
+    ## Parse metadata from xml
+    # Parse out data
+    channel_count = xml_data['channel_count']
+    neural_fs = xml_data['sampling_rate_sps']
+    
+    # Error check xml_data
+    if xml_data['is_still_recording']:
+        warning_text_l.append(
+            f'SERIOUS WARNING: {session_name}: '
+            f'{xml_file} is_still_recording is True, corruption is possible')
+        warn = True
+    else:
+        # These can only be checked if the recording completed
+        
+        # This one is mainly violated when the file is truncated
+        err = np.abs(
+            xml_data['file_duration_s'] - 
+            xml_data['precise_duration_s'])
+        if err > 0.6:
+            warning_text_l.append(
+                f'SERIOUS WARNING: {session_name}: '
+                f'{xml_file} file_duration differs by {err} '
+                'from precise_duration, suspect truncation')
+            warn = True
+            
+        # This one is mainly violated when packets were dropped
+        err = np.abs(
+            xml_data['file_duration_s'] - 
+            xml_data['approx_duration_s'])
+        if err > 1.5:
+            warning_text_l.append(
+                f'SERIOUS WARNING: {session_name}: '
+                f'{xml_file} file_duration differs by {err} '
+                'from approx_duration, suspect data loss')
+            warn = True
+    
+    
+    ## Concatenate and optionally print warning
+    warning_text = '\n'.join(warning_text_l)
+    if warn:
+        assert len(warning_text_l) > 0
+        if verbose:
+            print(warning_text)
+    else:
+        assert len(warning_text_l) == 0
+    
+    
+    ## Return
+    return {
+        'logger_name': logger_name,
+        'xml_file': xml_file,
+        'xml_data': xml_data,
+        'warn': warn,
+        'warning_text': '\n'.join(warning_text_l),
+        'channel_count': channel_count,
+        'neural_fs': neural_fs,
+        }
+
 def load_metadata_from_xml(neural_root, logger, session_name):
     """Load metadata like sampling rate from XML file for a logger recording
     
@@ -242,6 +377,9 @@ def load_metadata_from_xml(neural_root, logger, session_name):
             assert len(nodes) == 1
         except AssertionError as e:
             print(e)
+            
+        if len(nodes) != 1:
+            raise ValueError(f'cannot get {path} from {xml_file}')
         return nodes[0].text
 
     # Parse
