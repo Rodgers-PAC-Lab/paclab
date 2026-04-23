@@ -162,6 +162,7 @@ def find_logger_and_check_xml(session_name, verbose=True):
         os.path.expanduser('~/mnt/cuttlefish/whitematter_D/HSW_Ostim_donotuse'),
         os.path.expanduser('~/mnt/cuttlefish/whitematter/2024_10_HSWsoftware'),
         os.path.expanduser('~/mnt/cuttlefish/whitematter/HSW software'),
+        os.path.expanduser('~/mnt/cuttlefish/whitematter_D/20260420_HSW_control')
         ]
     
     
