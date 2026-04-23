@@ -374,42 +374,92 @@ def load_metadata_from_xml(neural_root, logger, session_name):
     # Helper function
     def helper_get(tree, path):
         nodes = tree.findall(path)
+        try:
+            assert len(nodes) == 1
+        except AssertionError as e:
+            print(e)
+            
         if len(nodes) != 1:
             raise ValueError(f'cannot get {path} from {xml_file}')
         return nodes[0].text
 
     # Parse
     xml_data = {}
-    xml_data['rec_mode_name'] = (
-        helper_get(tree, 'RECORD/REC_MODE_NAME'))
-    xml_data['sampling_rate_sps'] = float(
-        helper_get(tree, 'SETTINGS/SAMPLING_RATE_SPS'))
-    xml_data['rec_mode'] = (
-        helper_get(tree, 'RECORD/REC_MODE'))
-    xml_data['approx_duration_s'] = float(
-        helper_get(tree, 'RECORD/APPROX_DURATION_S'))
-    xml_data['stream_duration_s'] = float(
-        helper_get(tree, 'RECORD/STREAM_DURATION_S'))
-    xml_data['precise_duration_s'] = float(
+    try:
+        xml_data['rec_mode_name'] = (
+            helper_get(tree, 'RECORD/REC_MODE_NAME'))
+    except Exception as e:
+        print (e)
+    try:
+        xml_data['sampling_rate_sps'] = float(
+            helper_get(tree, 'SETTINGS/SAMPLING_RATE_SPS'))
+    except Exception as e:
+        print (e)
+    try:
+        xml_data['rec_mode'] = (
+            helper_get(tree, 'RECORD/REC_MODE'))
+    except Exception as e:
+        print (e)
+    try:
+        xml_data['approx_duration_s'] = float(
+            helper_get(tree, 'RECORD/APPROX_DURATION_S'))
+    except Exception as e:
+        print (e)
+    try:
+        xml_data['stream_duration_s'] = float(
+            helper_get(tree, 'RECORD/STREAM_DURATION_S'))
+    except Exception as e:
+        print (e)
+    try:
+        xml_data['precise_duration_s'] = float(
         helper_get(tree, 'RECORD/PRECISE_DURATION_S'))
-    xml_data['sync_enabled'] = (
-        helper_get(tree, 'SYNCHRONISATION/SYNC_ENABLED'))
-    xml_data['sync_frequency'] = (
-        helper_get(tree, 'SYNCHRONISATION/SYNC_FREQUENCY'))
-    xml_data['session_type'] = (
-        helper_get(tree, 'RECORD/SESSION_TYPE'))
-    xml_data['is_still_recording'] = (
-        helper_get(tree, 'RECORD/IS_STILL_RECORDING'))
-    xml_data['version'] = (
-        helper_get(tree, 'INFO/VERSION'))
-    xml_data['valid'] = (
-        helper_get(tree, 'HEADSTAGE/VALID'))
-    xml_data['ts_approx_start_cmd'] = (
-        helper_get(tree, 'RECORD/TS_APPROX_START_CMD'))
-    xml_data['ts_approx_start_ack'] = (
-        helper_get(tree, 'RECORD/TS_APPROX_START_ACK'))
-    xml_data['ts_approx_stop_ack'] = (
-        helper_get(tree, 'RECORD/TS_APPROX_STOP_ACK'))
+    except Exception as e:
+        print (e)
+    try:
+        xml_data['sync_enabled'] = (
+            helper_get(tree, 'SYNCHRONISATION/SYNC_ENABLED'))
+    except Exception as e:
+        print (e)        
+    try:
+        xml_data['sync_frequency'] = (
+            helper_get(tree, 'SYNCHRONISATION/SYNC_FREQUENCY'))
+    except Exception as e:
+        print (e)
+    try:
+        xml_data['session_type'] = (
+            helper_get(tree, 'RECORD/SESSION_TYPE'))
+    except Exception as e:
+        print (e)
+    try:
+        xml_data['is_still_recording'] = (
+            helper_get(tree, 'RECORD/IS_STILL_RECORDING'))
+    except Exception as e:
+        print (e)
+    try:
+        xml_data['version'] = (
+            helper_get(tree, 'INFO/VERSION'))
+    except Exception as e:
+        print (e)
+    try:
+        xml_data['valid'] = (
+            helper_get(tree, 'HEADSTAGE/VALID'))
+    except Exception as e:
+        print (e)
+    try:
+        xml_data['ts_approx_start_cmd'] = (
+            helper_get(tree, 'RECORD/TS_APPROX_START_CMD'))
+    except Exception as e:
+        print (e)
+    try:
+        xml_data['ts_approx_start_ack'] = (
+            helper_get(tree, 'RECORD/TS_APPROX_START_ACK'))
+    except Exception as e:
+        print (e)
+    try:
+        xml_data['ts_approx_stop_ack'] = (
+            helper_get(tree, 'RECORD/TS_APPROX_STOP_ACK'))
+    except Exception as e:
+        print (e)
 
     
     ## Additional parsing
@@ -421,8 +471,9 @@ def load_metadata_from_xml(neural_root, logger, session_name):
             'precise_duration_s',
             'sync_enabled',
             ]:
-        assert int(xml_data[key]) == float(xml_data[key])
-        xml_data[key] = int(xml_data[key])
+                
+            assert int(xml_data[key]) == float(xml_data[key])
+            xml_data[key] = int(xml_data[key])
 
     # Ensure these strs are bools
     for key in [
