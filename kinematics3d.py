@@ -1,4 +1,4 @@
-""" Helper functions for working with 3D kinematics
+"""Helper functions for working with 3D kinematics
 
 keypoints_array2df : Convert an array of dannce keypoints to a DataFrame
 keypoints_df2array : Convert a DataFrame of dannce keypoints to an ndarray
@@ -7,7 +7,7 @@ invert_egocenter_and_align : invert egocentering and alignment
 define_joints : dict of joint_name -> (proximal, central, distal) keypoints
 compute_compound_joint_angles : compute compound joint angles from keypoints
 compute_local_basis : helper function (Gram Schmidt)
-compute_spherical_joint_angles : computer spherical joint angles from keypoints
+compute_spherical_joint_angles : compute spherical joint angles from keypoints
 reconstruct_cartesian_from_spherical : invert compute_spherical_joint_angles
 """
 import os
@@ -411,6 +411,9 @@ def compute_compound_joint_angles(data):
     arccos(u . v / (|u| |v|)) and in the range [0, pi].
     A straight joint yields pi; a fully folded joint gives 0.
     
+    The same angle may be obtained as the elevation angle from
+    compute_spherical_joint_angles; however, this function is simpler. 
+    
     data : DataFrame
         index: frame
         columns: MultiIndex (coord, joint), coord in {'x', 'y', 'z'}
@@ -556,6 +559,9 @@ def compute_spherical_joint_angles(data, warn=True):
     The third rotational DoF (roll about the proximal segment's long axis) 
     is not recoverable, although one could choose to relabel distal azimuth
     as proximal roll.
+    
+    Note that the 'elevation' angle is the same as the 'compound' angle 
+    from compute_compound_joint_angles.
 
     Currently we use the world Y-axis (which points to the mouse's left) as 
     the global reference. (Point of confusion: local +x is close to global +Y).
@@ -718,7 +724,8 @@ def reconstruct_cartesian_from_spherical(spherical_angles_d):
         and J_world has already been placed.
 
     spherical_angles_d : dict, output of compute_spherical_joint_angles
-        Must contain 'joint_angles', 'local_frames', and 'spine_keypoints'.
+        Must contain 'joint_angles', 'local_basis_vectors', and 
+        'spine_keypoints'.
     
     Returns: DataFrame
         index: frame
