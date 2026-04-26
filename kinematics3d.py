@@ -338,6 +338,483 @@ def invert_egocenter_and_align(egocentered_d):
     # Return
     return reconstructed
 
+def define_joints():
+    """Returns each joint as its (proximal, central, distal) keypoints.
+    
+    Each joint is a tuple of (proximal, central, distal) keypoint names.
+    The joint is located at the central keypoint, and is defined by the 
+    geometric relationship between the proximal segment and distal segment.
+    The joint is named by its (central, distal) keypoints.
+    
+    SpineM and SpineF are special in the sense that either can be considered
+    proximal to the other for the purpose of defining a proximal segment 
+    along the spine. All other joints are located in a well-defined tree
+    from proximal to distal.
+    
+    This list of joints is complete in the sense that every keypoint appears
+    as "distal" exactly once, and its "proximal" and "central" counterparts
+    are uniquely defined. However, note that SpineF and SpineM appear multiple
+    times as the "central" joint (e.g., shoulders, hips, and head).
+    
+    Returns: dict joint_name -> (proximal, central, distal) keypoint names
+    """
+    # Joint definitions: name -> (proximal, central, distal) keypoint names
+    joint_dict = {
+        # Forelimb: SpineM -> SpineF -> Shoulder -> Elbow -> Wrist -> Forepaw
+        'SpineF_ShoulderL':     ('SpineM', 'SpineF', 'ShoulderL'),
+        'ShoulderL_ElbowL':     ('SpineF', 'ShoulderL', 'ElbowL'),
+        'ElbowL_WristL':        ('ShoulderL', 'ElbowL', 'WristL'),
+        'WristL_ForepawL':      ('ElbowL', 'WristL', 'ForepawL'),
+        'SpineF_ShoulderR':     ('SpineM', 'SpineF', 'ShoulderR'),
+        'ShoulderR_ElbowR':     ('SpineF', 'ShoulderR', 'ElbowR'),
+        'ElbowR_WristR':        ('ShoulderR', 'ElbowR', 'WristR'),
+        'WristR_ForepawR':      ('ElbowR', 'WristR', 'ForepawR'),
+        
+        # Hindlimb chain: SpineF -> SpineM -> Knee -> Ankle -> Hindpaw
+        # TODO: label HipL/R and insert into the chain
+        'SpineM_KneeL':         ('SpineF', 'SpineM', 'KneeL'),
+        'KneeL_AnkleL':         ('SpineM', 'KneeL', 'AnkleL'),
+        'AnkleL_HindpawL':      ('KneeL', 'AnkleL', 'HindpawL'),
+        'SpineM_KneeR':         ('SpineF', 'SpineM', 'KneeR'),
+        'KneeR_AnkleR':         ('SpineM', 'KneeR', 'AnkleR'),
+        'AnkleR_HindpawR':      ('KneeR', 'AnkleR', 'HindpawR'),
+        
+        # Axial chain: SpineF -> SpineM -> Tail(base) -> Tail(mid) -> Tail(end)
+        'SpineM_Tail(base)':    ('SpineF', 'SpineM', 'Tail(base)'),
+        'Tail(base)_Tail(mid)': ('SpineM', 'Tail(base)', 'Tail(mid)'),
+        'Tail(mid)_Tail(end)':  ('Tail(base)', 'Tail(mid)', 'Tail(end)'),
+        
+        # Head: SpineM -> SpineF -> Snout
+        # TODO: convert SpineF_EarL and SpineF_EarR to head_roll and head_yaw
+        'SpineF_Snout':         ('SpineM', 'SpineF', 'Snout'),
+        'SpineF_EarL':          ('SpineM', 'SpineF', 'EarL'),
+        'SpineF_EarR':          ('SpineM', 'SpineF', 'EarR'),
+        }
+    
+    return joint_dict
+
+def compute_compound_joint_angles(data):
+    """Compute compound angles at each joint of egocentered 3D pose data.
+    
+    The compound angle at joint J with proximal neighbor P and distal
+    neighbor D is the angle between vectors J->P and J->D, computed as
+    arccos(u . v / (|u| |v|)) and in the range [0, pi].
+    A straight joint yields pi; a fully folded joint gives 0.
+    
+    data : DataFrame
+        index: frame
+        columns: MultiIndex (coord, joint), coord in {'x', 'y', 'z'}
+        Egocentering and alignment is irrelevant for compound angles
+    
+    Returns: DataFrame
+        index: same as `data`
+        columns: '{central}_{distal}' for each entry in define_joints()
+        values: compound angle in radians, in [0, pi]
+    """
+    
+    ## Error check no nulls
+    assert not data.isnull().any().any()
+    
+    
+    ## Compute one compound angle per joint per frame
+    # Get the joint definitions
+    joint_dict = define_joints()
+    
+    # Iterate over joints
+    angles = {}    
+    for joint_label, (proximal, central, distal) in joint_dict.items():
+        
+        # Get coordinates of the three keypoints on every frame
+        # Each is a DataFrame with columns x, y, z and one row per frame
+        P = data.xs(proximal, level='keypoint', axis=1)
+        J = data.xs(central, level='keypoint', axis=1)
+        D = data.xs(distal, level='keypoint', axis=1)
+        
+        # Vectors from central keypoint to each neighbor
+        u = P - J
+        v = D - J
+        
+        # Cosine of the angle between u and v
+        u_norm = np.sqrt((u ** 2).sum(axis=1))
+        v_norm = np.sqrt((v ** 2).sum(axis=1))
+        cos_angle = (u * v).sum(axis=1) / (u_norm * v_norm)
+        
+        # Clip to avoid floating point issues causing null angles
+        cos_angle_clipped = cos_angle.clip(-1, 1)
+        
+        # Error check that angle is not null (would happen if either u or v
+        # has zero length, i.e., coincident keypoints)
+        assert not cos_angle_clipped.isnull().any()
+        
+        # Compute angle and store
+        angles[joint_label] = np.arccos(cos_angle_clipped)
+    
+    
+    ## Assemble into a single DataFrame
+    # `angles` is a dict of Series; concat gives columns in insertion order
+    result = pandas.concat(angles, axis=1)
+    result.columns.name = 'joint'
+    
+    return result
+
+def compute_local_basis(z, x_ref):
+    """Build a right-handed orthonormal basis from two vectors.
+
+    `z` and `x_ref` are each np.array of shape (n_frames, 3).
+
+    For each frame, returns a 3x3 rotation matrix whose columns are the
+    unit basis vectors of a local coordinate frame:
+        +z = z, normalized
+        +x = component of x_ref orthogonal to +z (Gram-Schmidt)
+        +y = +z cross +x 
+    
+    The output R, when applied to a world-frame vector v as R.T @ v, gives
+    that vector's components in the local frame. Equivalently, R @ e_local
+    gives a local basis vector in world coords (e.g., R @ [0, 0, 1] = +z).
+    
+    Singularity warning: when z and x_ref are near parallel (or anti-parallel), 
+    the results are likely to be numerically unstable. When they are exactly
+    parallel, nans will be returned, without issuing any warnings.
+    
+    TODO: Redundant with _compute_rotation_matrix
+    
+    Returns: np.array of shape (n_frames, 3, 3)
+        R[f, :, 0] = +x of frame f, R[f, :, 1] = +y, R[f, :, 2] = +z.
+    """
+    # Helper function to suppress warnings
+    def normalize(v):
+        # Compute norm and fill zeros with nans to avoid RuntimeWarning
+        norm = np.linalg.norm(v, axis=1)[:, None]
+        norm[norm == 0] = np.nan
+        return v / norm
+    
+    # Normalize z and x_ref
+    z_norm = normalize(z)
+    x_ref_norm = normalize(x_ref)
+    
+    # Gram-Schmidt
+    # Compute `y` as z cross x_ref
+    y = np.cross(z_norm, x_ref_norm)
+    y_norm = normalize(y)
+    
+    # Compute `x` as y cross z
+    # Renormalize in case of numerical error
+    x_norm = normalize(np.cross(y_norm, z_norm))
+    
+    # Stack along last axis
+    res = np.stack([x_norm, y_norm, z_norm], axis=2)
+    
+    return res
+
+def compute_spherical_joint_angles(data, warn=True):
+    """Compute spherical joint angles (azimuth, elevation).
+
+    Each joint (i.e. tuple of proximal, central, and distal keypoint) is
+    uniquely specified by its distal keypoint. This function will return
+    two spherical angles (azimuth and elevation) and a length for each joint.
+
+    SpineM and SpineF define the central segment (most proximal nodes of the
+    pose tree). Note that the ordering is SpineM>SpineF>forelimbs but
+    SpineF>SpineM>hindlimbs. To enable reconstruction at the same location
+    and orientation as `data`, the original keypoints of SpineM and SpineF
+    are returned (somewhat redundant given the centering).
+    
+    For all other joints on each frame, we build a right-handed local coordinate 
+    frame at the central keypoint using the proximal segment and a global 
+    reference vector. The distal segment vector (central -> distal) is 
+    projected into this local frame and expressed in spherical coordinates 
+    (length, azimuth, elevation).
+    
+    Local frame construction for each joint on each frame:
+        +z: unit vector from central toward proximal (along proximal segment)
+        +x: Gram-Schmidt projection of the global reference into
+            the plane perpendicular to +z
+        +y: +z cross +x (completes the right-handed frame)
+
+    That is, +x is as close to the global reference as possible, given the 
+    proximal segment vector +z.
+
+    Interpretation of the angles:
+        elevation: angle in [0, pi] between distal and proximal segment (+z). 
+            0 = distal folded back along proximal
+            pi/2 = distal perpendicular to proximal
+            pi = distal fully extended away from proximal
+        azimuth: angle in [-pi, pi] of distal seg projected on local xy-plane
+            0 = points toward global reference (currently mouse's left)
+            pi/2 = points to +y (CCW from +x when viewed from prox to central)
+
+    The third rotational DoF (roll about the proximal segment's long axis) 
+    is not recoverable, although one could choose to relabel distal azimuth
+    as proximal roll.
+
+    Currently we use the world Y-axis (which points to the mouse's left) as 
+    the global reference. (Point of confusion: local +x is close to global +Y).
+    The rationale is that singularities occur when the proximal segment is 
+    nearly parallel to the reference vector, and the global Y-axis is least 
+    likely to be parallel to any of the segments. The torso vector (world X) 
+    is a particularly troublesome choice because the spine segment is nearly 
+    always oriented along world X, and the spine segment is the proximal 
+    segment for many joints. 
+    
+    Arguments
+        data : DataFrame of yaw-aligned keypoints from `egocenter`
+            index: frame
+            columns: MultiIndex (coord, joint), coord in {'x', 'y', 'z'}
+            Yaw-aligned keypoints are required in order for the global reference
+            to make sense.
+        warn : bool, if True print warning for collinear joints
+    
+    Returns: dict with following items
+        joint_angles: DataFrame
+            columns: MultiIndex (joint, coord)
+                Note that this is the opposite of the level ordering for `data`
+            values: angle in radians or length in mm
+        local_basis_vectors: DataFrame
+            columns: MultiIndex (joint, world, local)
+        collinearity: DataFrame
+            columns: joint
+            values: dot product of proximal segment and reference vector
+        spine_keypoints: DataFrame
+            columns: MultiIndex (coord, joint) with joints {'SpineM', 'SpineF'}
+            values: SpineM and SpineF positions in the centered frame
+    
+    Note that every returned DataFrame has the same index as `data`
+    """
+    
+    # Error check no nulls
+    assert not data.isnull().any().any()
+    
+    # Number of frames, used throughout
+    n_frames = len(data)
+    
+    # Joint definitions
+    joint_dict = define_joints()
+
+    # Extract SpineM and SpineF positions
+    # Store and return these positions to enable reconstruction 
+    # (required to account for centering)
+    spine_keypoints = data.reindex(
+        ['SpineF', 'SpineM'], level='keypoint', axis=1)
+
+    
+    ## Compute spherical angles for each joint
+    # Store angles and debugging information for each joint
+    angles_l = []
+    frame_matrix_l = []
+    collinearity_l = []
+    keys_l = []
+    
+    # Iterate over joints
+    for joint_label, (proximal, central, distal) in joint_dict.items():
+        
+        # Get keypoint coordinates on every frame as (n_frames, 3) arrays
+        P = data.xs(proximal, level='keypoint', axis=1).values
+        J = data.xs(central, level='keypoint', axis=1).values
+        D = data.xs(distal, level='keypoint', axis=1).values
+        
+        # Proximal segment: from central toward proximal. This is +z of the
+        # local frame.
+        proximal_segment = P - J
+        
+        # Reference vector
+        # Shape (n_frames, 3) so it can be passed to compute_local_basis
+        # TODO: consider per-joint reference vector
+        v_ref = np.tile(np.array([0., 1., 0.]), (n_frames, 1))
+
+        # Collinearity check
+        dot = pandas.Series(
+            np.sum(proximal_segment * v_ref, axis=1) / 
+            np.linalg.norm(proximal_segment, axis=1) / 
+            np.linalg.norm(v_ref, axis=1),
+            index=data.index,
+            )
+        
+        # Build local frame via Gram-Schmidt. R has shape (n_frames, 3, 3)
+        R = compute_local_basis(proximal_segment, v_ref)
+        
+        # Error check
+        assert not np.isnan(R).any()
+        
+        # Distal segment: from central toward distal, in world coordinates
+        distal_segment = D - J
+        
+        # Project distal segment into the local frame. 
+        # R[f] has basis vectors as columns, so R[f].T maps world -> local.
+        # einsum 'fji,fj->fi' contracts on the world-frame axis (j),
+        # leaving (frame, local axis)
+        v_local = np.einsum('fji,fj->fi', R, distal_segment)
+        
+        # Convert local-frame distal vector to spherical coordinates.
+        length, azim, elev = cart2sphere(
+            v_local[:, 0], v_local[:, 1], v_local[:, 2])
+        
+        # Convert angles to DataFrame
+        joint_angles = pandas.DataFrame.from_dict(
+            {'length': length, 'azim': azim, 'elev': elev})
+        joint_angles.index = data.index
+        
+        # Convert frame matrix to DataFrame
+        frame_matrix = pandas.DataFrame(R.reshape(n_frames, -1))
+        frame_matrix.index = data.index
+        frame_matrix.columns = pandas.MultiIndex.from_product([
+            pandas.Series(['x', 'y', 'z'], name='world'),
+            pandas.Series(['x', 'y', 'z'], name='local'),
+            ])
+        
+        # Store
+        angles_l.append(joint_angles)
+        frame_matrix_l.append(frame_matrix)
+        collinearity_l.append(dot)
+        keys_l.append(joint_label)
+    
+    
+    ## Concat over joints
+    big_angles = pandas.concat(
+        angles_l, keys=keys_l, names=['joint', 'coord'], axis=1)
+    big_frame_matrix = pandas.concat(
+        frame_matrix_l, keys=keys_l, names=['joint'], axis=1)
+    big_collinearity = pandas.concat(
+        collinearity_l, keys=keys_l, names=['joint'], axis=1)
+
+
+    ## Errors and warnings
+    # Error check no nulls in output
+    assert not big_angles.isnull().any().any()
+    
+    # Warning on collinearity
+    if warn:
+        print("warning: this many joints near collinear")
+        print((big_collinearity.abs() > 0.99).mean().sort_values())
+    
+    
+    ## Return
+    return {
+        'joint_angles': big_angles,
+        'local_basis_vectors': big_frame_matrix,
+        'collinearity': big_collinearity,
+        'spine_keypoints': spine_keypoints,
+        }
+
+def reconstruct_cartesian_from_spherical(spherical_angles_d):
+    """Invert compute_spherical_joint_angles to recover cartesian keypoints.
+    
+    Reconstruction proceeds outward through the kinematic tree:
+    1.  Place SpineF and SpineM at stored positions
+        This step grounds the reconstructed mouse at the desired location
+        and orientation (6 degrees of freedom).
+    2.  For each remaining joint, place its distal keypoint as
+        D_world = J_world + R @ sphere2cart(length, azim, elev)
+        where R is the stored local frame at the central keypoint J,
+        and J_world has already been placed.
+
+    spherical_angles_d : dict, output of compute_spherical_joint_angles
+        Must contain 'joint_angles', 'local_frames', and 'spine_keypoints'.
+    
+    Returns: DataFrame
+        index: frame
+        columns: MultiIndex (coord, joint), coord in {'x', 'y', 'z'}
+        values: keypoint positions in mm
+    """
+    
+    ## Unpack inputs
+    joint_angles = spherical_angles_d['joint_angles']
+    local_frames = spherical_angles_d['local_basis_vectors']
+    spine_keypoints = spherical_angles_d['spine_keypoints']
+    
+    # Number of frames
+    n_frames = len(joint_angles)
+    
+    # joint dict
+    joint_dict = define_joints()
+
+    # Use this to order the returned data
+    joint_names, _ = get_skeleton()
+    
+    
+    ## Place SpineF and SpineM
+    # Stored positions, regardless of what centering was used in `data`.
+    # `keypoints` accumulates reconstructed positions, keyed by joint name,
+    # values being (n_frames, 3) arrays in (x, y, z) order.
+    keypoints = {}
+    for joint_name in ['SpineF', 'SpineM']:
+        keypoints[joint_name] = spine_keypoints.xs(
+            joint_name, level='keypoint', axis=1)[['x', 'y', 'z']]
+    
+    
+    ## Reconstruction order
+    # Each entry: joint_label. The distal keypoint of that joint is placed
+    # using the central keypoint (already placed) and the joint's stored
+    # local frame and (length, azim, elev).
+    reconstruction_order = [
+        # Branch off SpineF (head and shoulders)
+        'SpineF_ShoulderL',
+        'SpineF_ShoulderR',
+        'SpineF_Snout',
+        'SpineF_EarL',
+        'SpineF_EarR',
+        
+        # Branch off SpineM (hindlimbs and tail)
+        'SpineM_KneeL',
+        'SpineM_KneeR',
+        'SpineM_Tail(base)',
+        
+        # Forelimb chains
+        'ShoulderL_ElbowL',
+        'ElbowL_WristL',
+        'WristL_ForepawL',
+        'ShoulderR_ElbowR',
+        'ElbowR_WristR',
+        'WristR_ForepawR',
+        
+        # Hindlimb chains
+        'KneeL_AnkleL',
+        'AnkleL_HindpawL',
+        'KneeR_AnkleR',
+        'AnkleR_HindpawR',
+        
+        # Tail chain
+        'Tail(base)_Tail(mid)',
+        'Tail(mid)_Tail(end)',
+        ]
+    
+    
+    ## Walk the tree, placing one keypoint at a time
+    for joint_label in reconstruction_order:
+        
+        # Get the keypoints for this joint
+        proximal, central, distal = joint_dict[joint_label]
+        
+        # Get the spherical coords for this joint (each has shape (n_frames,))
+        length = joint_angles[(joint_label, 'length')].values
+        azim = joint_angles[(joint_label, 'azim')].values
+        elev = joint_angles[(joint_label, 'elev')].values
+        
+        # Convert spherical -> Cartesian in the joint's local frame
+        v_local_x, v_local_y, v_local_z = sphere2cart(length, azim, elev)
+        v_local = np.stack([v_local_x, v_local_y, v_local_z], axis=1)
+        
+        # Get the local frame at the central keypoint
+        # local_frames stores R as flattened columns; reshape to recover the
+        # (n_frames, 3, 3) array with basis vectors as columns
+        R = local_frames[joint_label].values.reshape(n_frames, 3, 3)
+        
+        # Map the local-frame distal vector back to world (centered) coords
+        # "Backwards" transformation: R @ v_local gives world coords
+        v_world = np.einsum('fij,fj->fi', R, v_local)
+        
+        # Distal keypoint position = central keypoint + segment vector
+        # Becomes a DataFrame (inherits index and cols from keypoints[central])
+        keypoints[distal] = keypoints[central] + v_world
+    
+    # Concat
+    result = pandas.concat(keypoints, axis=1, names=['keypoint'])
+    
+    # Swaplevel to match the keypoints
+    result = result.swaplevel(axis=1).sort_index(axis=1).reindex(
+        joint_names, axis=1, level='keypoint')
+
+    return result
+
 def _parse_camera_parameters(data, legacy = False):
     """Parse camera params from Label3D data
     
