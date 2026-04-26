@@ -12,8 +12,6 @@ try:
 except:
     print("WARNING: ffmpeg failed to import. Functions depending on ffmpeg will not be usable.")
 
-
-
 def keypoints_array2df(arr):
     """Convert an ndarray of dannce keypoints to a labeled DataFrame
     
@@ -155,6 +153,190 @@ def load_label3d_data(filename):
         'points_2d': points_2d,
         'points_3d': points_3d,
         }
+
+def egocenter_and_align(
+    data, 
+    center_keypoints=('SpineM', 'SpineF'), 
+    align_keypoints=('SpineM', 'SpineF'), 
+    level_pitch=False,
+    warn=True,
+    ):
+    """Egocenter and align 3D pose data.
+    
+    Each frame is translated so that the centroid of the keypoints named in
+    `center` sits at the origin, then rotated so that the alignment vector from 
+    `align[0]` to `align[1]` points toward +x. 
+    
+    If `level_pitch`, the alignment vector will have no z-component and lie
+    along +x; otherwise, it will retain its original pitch in the xz-plane. 
+    In either case, there is no correction for roll.
+    
+    All rotations are extrinsic and performed in "yaw before pitch" order.
+
+    TODO: redundant functionality available in egocenter.
+
+    Arguments
+    ---
+    data : DataFrame containing keypoints from keypoints_array2df
+        index: frame
+        columns: MultiIndex (coord, keypoint)
+    center_keypoints : list-like of any length
+        Centroid of the keypoints in this list will be sent to the origin
+    align_keypoints : list-like of length 2
+        'alignment vector' goes from align_keypoints[0] to align_keypoints[1]
+    level_pitch : bool
+        If False, rotate around z only (yaw). The alignment vector lands in
+        the xz-plane but its z-component is preserved.
+        If True, additionally rotate around y so the alignment vector lands
+        along +x with no z-component.
+    warn : bool
+        If True, issue warnings when the alignment vector is too short or
+        nearly vertical, in which case the results are unreliable.
+    
+    Returns: dict with the following items
+    ---
+    'aligned': DataFrame with the same index and columns as `data`
+        Centered and aligned keypoints in millimeters
+    'translation': DataFrame with cols ('x', 'y', 'z'); same index as `data`
+        Translation that was applied to each frame
+    'alignment_vector': DataFrame with same shaped as `translation`
+        Original alignment_vector computed on each frame
+        Useful for finding frames where alignment couldn't be done well
+    'rotation': scipy.spatial.Rotation 
+        Rotation that was applied to each frame
+        Rotation.as_matrix() has shape (n_frames, 3, 3)
+    """
+    
+    ## Get size
+    n_frames = len(data)
+    n_keypoints = data.columns.get_level_values('keypoint').nunique()
+    assert data.shape[1] == 3 * n_keypoints
+    assert data.columns.names == ['coord', 'keypoint']
+    assert (
+        list(data.columns.get_level_values('coord').unique()) == 
+        ['x', 'y', 'z'])
+    
+    
+    ## Translate to send the centroid of these keypoints to the origin
+    translation = -data.reindex(
+        center_keypoints, level='keypoint', axis=1).T.groupby('coord').mean().T
+    
+    # Apply
+    ego = data.add(translation, level='coord', axis=1)
+    
+    
+    ## Compute the way the mouse is pointing in each frame in (x, y, z)
+    v = (
+        ego.xs(align_keypoints[1], level='keypoint', axis=1) -
+        ego.xs(align_keypoints[0], level='keypoint', axis=1))
+
+    if warn:
+        # Check for frames where v is too short (align_keypoints are coincident)
+        v_len = np.sqrt((v ** 2).sum(axis=1))
+        n_bad_frames = (v_len < 0.01 * v_len.median()).sum()
+        if n_bad_frames > 0:
+            print(f'warning: too short alignment vector on {n_bad_frames} frames')
+
+        # Check for frames where the mouse is nearly vertical
+        # Everything will still work (no nulls), but the yaw rotation will be 
+        # dominated by noise and thus meaningless
+        # TODO: align by another segment in this case - head or forelimbs maybe?
+        z_proj = v['z'] / v_len
+        n_bad_frames = (z_proj.abs() > .999).sum()
+        if n_bad_frames > 0:
+            print(f'warning: near-vertical mouse on {n_bad_frames} frames')
+
+
+    ## Correct for yaw
+    # Compute the angle of `v` in the XY plane - the "heading" - on each frame
+    initial_heading = np.arctan2(v['y'], v['x'])
+
+    # Compute XY rotation (yaw) on each frame that will point the XY 
+    # component of `v` toward the +x axis on each frame
+    # That is, a rotation of `-initial_heading` about the Z axis
+    # R_yaw.as_matrix() has shape (n_frames, 3, 3)
+    R_yaw = scipy.spatial.transform.Rotation.from_euler('Z', -initial_heading)
+    
+    
+    ## Optionally correct for pitch
+    # Compute a second rotation to pitch the mouse horizontal, that is, 
+    # to make `v` point toward +x in XYZ (not just XY)
+    if level_pitch:
+        # Compute the component in the xy plane
+        # After `R_yaw` corrects yaw, `v` will become (horiz, 0, z)
+        horiz = np.sqrt(v['x'] ** 2 + v['y'] ** 2)
+        initial_pitch = np.arctan2(v['z'], horiz)
+
+        # Rotate about Y to send initial_pitch to flat
+        # Note that it is +initial_pitch not -initial_pitch because of the
+        # right-hand rule (positive rotation send +z to +x)
+        R_pitch = scipy.spatial.transform.Rotation.from_euler(
+            'Y', initial_pitch)
+        
+        # Compose the two rotations: yaw first, then pitch
+        # (Note that the right matrix is applied first)
+        R = R_pitch * R_yaw  
+    
+    else:
+        R = R_yaw
+    
+    
+    ## Apply the rotation
+    # reshape `ego` to (frames, old_coords, keypoints) or fjk
+    ego_arr = ego.values.reshape((n_frames, 3, n_keypoints))
+    
+    # R.as_matrix (frames, new_coords, old_coords) or fij
+    # Result: (frames, new_coords, keypoints) or fik
+    # Note that this is equivalent to simply: R.as_matrix() @ egoarr
+    rotated = np.einsum('fij,fjk->fik', R.as_matrix(), ego_arr)
+    
+    # Reshape rotated to be like ego
+    rotated = rotated.reshape((n_frames, -1))
+    rotated_df = pandas.DataFrame(rotated, index=ego.index, columns=ego.columns)
+
+    
+    ## Check
+    # This should point toward x
+    new_v = (
+        rotated_df.xs(align_keypoints[1], level='keypoint', axis=1) -
+        rotated_df.xs(align_keypoints[0], level='keypoint', axis=1))
+    assert new_v['y'].abs().max() < 1e-6
+    if level_pitch:
+        assert new_v['z'].abs().max() < 1e-6
+    
+    
+    ## Return
+    return {
+        'aligned': rotated_df,
+        'translation': translation,
+        'rotation': R,
+        'alignment_vector': v,
+        }
+
+def invert_egocenter_and_align(egocentered_d):
+    """Inverts the transformation performed by egocenter_and_align
+    
+    egocentered_d : output of egocenter_and_align
+    
+    Returns : DataFrame that is hopefully allclose to the original keypoints
+    """
+    # Reshape
+    centered = egocentered_d['aligned']
+    centered_arr = centered.values.reshape(len(centered), 3, -1)
+    
+    # Unrotate
+    unrotate_R = egocentered_d['rotation'].as_matrix().swapaxes(1, 2)
+    unrotated = unrotate_R @ centered_arr
+    unrotated = pandas.DataFrame(
+        unrotated.reshape(len(centered), -1),
+        index=centered.index, columns=centered.columns)
+    
+    # Untranslate
+    untranslate_vec = -egocentered_d['translation']
+    reconstructed = unrotated + untranslate_vec
+    
+    # Return
+    return reconstructed
 
 def _parse_camera_parameters(data, legacy = False):
     """Parse camera params from Label3D data
