@@ -1,5 +1,15 @@
-## Helper functions for working with 3D kinematics
+""" Helper functions for working with 3D kinematics
 
+keypoints_array2df : Convert an array of dannce keypoints to a DataFrame
+keypoints_df2array : Convert a DataFrame of dannce keypoints to an ndarray
+egocenter_and_align : egocenter and align 3d keypoints
+invert_egocenter_and_align : invert egocentering and alignment
+define_joints : dict of joint_name -> (proximal, central, distal) keypoints
+compute_compound_joint_angles : compute compound joint angles from keypoints
+compute_local_basis : helper function (Gram Schmidt)
+compute_spherical_joint_angles : computer spherical joint angles from keypoints
+reconstruct_cartesian_from_spherical : invert compute_spherical_joint_angles
+"""
 import os
 import numpy as np
 import scipy.io
