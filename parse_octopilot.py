@@ -120,6 +120,16 @@ def choose_sandboxes_to_enter(
     sandbox_df['enter_sandbox'] = (
         sandbox_df['enter_sandbox'] & ~sandbox_df['in_munged'])
     
+    # Warn if no sandboxes left
+    if len(sandbox_df) == 0:
+        print('warning: no sandboxes found')
+    
+    elif not sandbox_df['enter_sandbox'].any():
+        print(
+            'warning: no sandboxes found for this mouse. try: ' + 
+            ' '.join(sorted(sandbox_df['mouse_name'].unique()))
+            )
+    
     return sandbox_df
 
 def load_session(
