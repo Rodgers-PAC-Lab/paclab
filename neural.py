@@ -34,6 +34,10 @@ def find_logger(neural_root, session_name):
         The logger name if it was found, or None if the session wasn't found
         This will be like '628DAB' not 'logger_628DAB'
     """
+    # error check
+    if pandas.isnull(session_name):
+        raise ValueError('session_name cannot be null')
+    
     # Find all logger directories
     logger_dirs = glob.glob(os.path.join(neural_root, 'logger_*'))
     
@@ -128,7 +132,7 @@ def find_logger_and_check_xml(session_name, verbose=True):
     
     Arguments
     ---
-    * session_name : name of neural session to find
+    * session_name : name of neural session to find (without ".bin")
     * verbose : bool
         If True warnings will be printed
         Either way they will be returned as 'warning_text' and 'warn'
@@ -152,6 +156,11 @@ def find_logger_and_check_xml(session_name, verbose=True):
         'channel_count': int
         'neural_fs': float
     """
+    
+    ## Error check
+    if pandas.isnull(session_name):
+        raise ValueError('session_name cannot be null')
+    
     
     ## Places to search for raw data
     # Neural data for raw data
@@ -888,7 +897,7 @@ def make_plot(
     for ncol, col in enumerate(got_data.T):
         ypos = ch_ypos[ncol]
         y_offset = -inter_ch_spacing * ypos
-        ax.plot(t_ds, col + y_offset, 'k', clip_on=False, **plot_kwargs)
+        ax.plot(t_ds, col + y_offset, 'k', clip_on=False, lw=.75, **plot_kwargs)
 
     
     ## Overplot the spikes
