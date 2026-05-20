@@ -82,7 +82,7 @@ def keypoints_df2array(df):
     `df` should be a DataFrame with frame number on the index and a 
     MultiIndex ('coord', 'keypoint') on the columns.
     
-    This function converts the DataFrame to an unlabled 3d array in 
+    This function converts the DataFrame to an unlabeled 3d array in 
     (n_frame, coord, keypoint) axis order. Multi-animal is not supported.
     This function can be inverted by keypoints_array2df.
 
@@ -1001,7 +1001,7 @@ def _parse_labeled_points(data):
     return big_points, points_3d
 
 def get_skeleton():
-    """Return the joints and edges in the mouse22 skeleton
+    """Return the keypoints and edges in the mouse22 skeleton
     
     This comes from sdannce.dannce.engine.skeletons.utils
     
@@ -1011,11 +1011,11 @@ def get_skeleton():
     pandas.DataFrame(_BODY_CONNECTIVITY['mouse22']).replace(
         pandas.Series(_JOINT_NAMES['mouse22']))    
     
-    Returns: joint_names, body_connectivity
-        joint_names : a list of joint names in standard order
-        body_connectivity : a list of tuples of joint names, one per edge
+    Returns: keypoint_names, body_connectivity
+        keypoint_names : a list of keypoint names in standard order
+        keypoint_edges : a list of tuples of keypoint names, one per edge
     """
-    joint_names = [
+    keypoint_names = [
         'EarL',
         'EarR',
         'Snout',
@@ -1040,7 +1040,7 @@ def get_skeleton():
         'KneeR',
         ]
 
-    body_connectivity = [
+    keypoint_edges = [
         ('EarL', 'EarR'),
         ('EarR', 'Snout'),
         ('EarL', 'Snout'),
@@ -1067,7 +1067,7 @@ def get_skeleton():
         ('KneeR', 'SpineM'),    
         ] 
     
-    return joint_names, body_connectivity
+    return keypoint_names, keypoint_edges
 
 ## Loading + misc helperfunctions
 def load_COM(filepath):
@@ -1081,16 +1081,32 @@ def load_COM(filepath):
     com = scipy.io.loadmat(filepath)['com']
     return com
 
-def load_DANNCE(filepath):
-    '''
-    Load 3D keypoint predictions from a DANNCE predictions file
+def load_DANNCE(filepath, squeeze=False):
+    """Load 3D keypoint predictions from a DANNCE predictions file
     
-    filepath: path to DANNCE predictions file
+    filepath : path to DANNCE predictions file
+        Generally this is something like
+        "mouse_name/date_str/DANNCE/xyz_predict_results/save_data_AVG.mat"
 
-    Returns pred: TxNx3xK numpy array, where T is the number of frames, N is the number of animals
-             (always 1 for single-animal experiments), and K is the number of keypoints
-    '''
+    squeeze : bool
+        If True and if n_animals == 1, slice out the only animal
+        TODO: change the default to `True`
+
+    Returns: np.array of shape (T, N, 3, K)
+        T: number of frames
+        N: number of animals
+        3: (x, y, z)
+        K: number of keypoints
+    """
+    # Load
     pred = scipy.io.loadmat(filepath)['pred']
+    assert pred.ndim == 4
+    assert pred.shape[2] == 3
+    
+    # Squeeze
+    if squeeze and pred.shape[1] == 1:
+        pred = pred[:, 0, :, :]
+    
     return pred
 
 def load_skeleton(filepath):
