@@ -1939,6 +1939,69 @@ def euclidean_distance_3D(predicted, target, axis = 0):
         return nanmean_infmean(mpjpe, axis)
     return mpjpe
 
+def compute_all2all(keypoints_df, connectivity_df):
+    """Compute all2all distance
+    
+    Computes the length of all edges specified in `connectivity_df` on
+    the data in `keypoints_df`. Warn if a specified edge is missing.
+    
+    keypoints_df : DataFrame
+        From paclab.kinematics3d.keypoints_array2df
+        Columns : MultiIndex ('coord, 'keypoint')
+    
+    connectivity_df : DataFrame
+        Rows: edges. Columns: ('src', 'dst'). Values: keypoint names
+        To make this, take keypoint_edges from paclab.kinematics3d.get_skeleton
+        and compute pandas.DataFrame(keypoint_edges, columns=['src', 'dst'])
+    
+    Returns : DataFrame
+        rows : same as rows of `keypoints_df`
+        cols : strings like f'{src}-{dst}'; one per row of `connectivity_df`
+        values : distances
+    """
+    
+    ## Set default value for connectivity_df as all possible edges
+    if connectivity_df is None:
+        # All possible combinations
+        connectivity_df = pandas.MultiIndex.from_product([
+            keypoints_df.columns.levels[1],
+            keypoints_df.columns.levels[1],
+            ], names=['src', 'dst']).to_frame().reset_index(drop=True)
+        
+        # Drop duplicates and make one-way
+        connectivity_df = connectivity_df[
+            connectivity_df['src'] < connectivity_df['dst']
+            ].reset_index(drop=True)
+    
+    
+    ## Compute edges
+    dist_l = []
+    keys_l = []
+    for idx, (src_name, dst_name) in connectivity_df.iterrows():
+        # Get each node
+        try:
+            src = keypoints_df.xs(src_name, level='keypoint', axis=1)
+            dst = keypoints_df.xs(dst_name, level='keypoint', axis=1)
+        except KeyError:
+            print(f'warning: cannot find {src_name} or {dst_name}, skipping')
+            continue
+        
+        # Compute edge length
+        diff = src - dst
+        dist = np.sqrt((diff ** 2).sum(axis=1))
+        
+        # Store
+        dist_l.append(dist)
+        keys_l.append(f'{src_name}-{dst_name}')
+
+    # concat
+    edge_df = pandas.concat(dist_l, keys=keys_l, names=['edge'])
+    
+    # Unstack edge name
+    edge_df = edge_df.unstack('edge')
+    
+    return edge_df
+
 def compute_all2all_distances(pred, edges = None, index_base = 1):
     '''
     Compute the 3D Euclidean distance between keypoints in the skeleton.
