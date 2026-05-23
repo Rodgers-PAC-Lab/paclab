@@ -265,7 +265,10 @@ def egocenter_and_align(
     # component of `v` toward the +x axis on each frame
     # That is, a rotation of `-initial_heading` about the Z axis
     # R_yaw.as_matrix() has shape (n_frames, 3, 3)
-    R_yaw = scipy.spatial.transform.Rotation.from_euler('Z', -initial_heading)
+    R_yaw = scipy.spatial.transform.Rotation.from_euler(
+        'Z', 
+        -initial_heading.values[:, None], # scipy 1.17.1 requires 2d input
+        )
     
     
     ## Optionally correct for pitch
