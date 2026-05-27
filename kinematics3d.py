@@ -714,6 +714,127 @@ def compute_spherical_joint_angles(data, warn=True):
         'spine_keypoints': spine_keypoints,
         }
 
+def simplify_spherical_angles(spherical_angles):
+    """Simplify full (invertible) set of angles to a reduced (interpretable) one
+    
+    Workflow
+    - Demeans the azimuth to avoid the wraparound 
+    - Drop lengths (no biomechanical meaning)
+      TODO: extract animal size estimate from this for scaling?
+    - Drop the azimuths from joints for which it doesn't really map onto
+      anatomical meaning, which is all that aren't connected to the spine
+    - TODO: relabel the resulting angles with anatomical names like
+      "shoulder_rotation" or whatever
+    - Converts straight elevation from 2*pi to zero 
+      TODO: do this upstream in compute_
+    
+    spherical_angles : DataFrame
+        Obtained from computer_spherical_joint_angles
+        columns : MultiIndex (joint, coord)
+        index : n_frame
+        values : angles in radians
+    
+    Returns : DataFrame
+        A subset of columns of spherical_angles, with the level 'azim'
+        replaced by 'azim_demeaned'
+    """
+    ## Transform azimuth
+    # Demean azim
+    # TODO: make this demeaning optional
+    azim = spherical_angles.xs('azim', level='coord', axis=1)
+    azim_demeaned = azim.sub(scipy.stats.circmean(azim, axis=0))
+    azim_demeaned = np.mod(azim_demeaned + np.pi, 2 * np.pi) - np.pi
+
+    # Replace azim with azim_demeaned
+    to_concat = pandas.concat(
+        [azim_demeaned], keys=['azim_demeaned'], names=['coord'], axis=1
+        ).swaplevel(axis=1)
+    spherical_angles = pandas.concat(
+        [spherical_angles, to_concat], axis=1, verify_integrity=True
+        ).sort_index(axis=1)
+    spherical_angles = spherical_angles.drop('azim', axis=1, level='coord')
+
+
+    ## Finish spherical angles
+    # Drop length, which has no biomechanical meaning
+    spherical_angles = spherical_angles.drop('length', axis=1, level='coord')
+
+    # Drop azimuths that are poorly fit
+    spherical_angles = spherical_angles.drop([
+        ('Tail(base)_Tail(mid)', 'azim_demeaned'), # somewhat dispersed - might be okay though
+        ('Tail(mid)_Tail(end)', 'azim_demeaned'), # biomodal, often collinear with ref vector
+        ('WristR_ForepawR', 'azim_demeaned'), # assume all wrist movement is flexion, because
+        ('WristL_ForepawL', 'azim_demeaned'), #   abduction is small and +y is not the right axis
+        ('AnkleR_HindpawR', 'azim_demeaned'), # assume all ankle movement is flexion, because
+        ('AnkleL_HindpawL', 'azim_demeaned'), #   abduction is small and +y is not the right axis
+        #('SpineF_Snout', 'azim_demeaned'), # dispersed, seems redundant with head roll
+        ('SpineF_EarL', 'azim_demeaned'), # mixture of roll and turn, redundant with other ear
+        ('SpineF_EarR', 'azim_demeaned'), # mixture of roll and turn, redundant with other ear
+        ], axis=1)
+    
+    
+    ## Convert "straight" from pi to zero
+    elev_mask = spherical_angles.columns.get_level_values('coord') == 'elev'
+    val = spherical_angles.loc[:, elev_mask].values
+    spherical_angles.loc[:, elev_mask] = np.pi - val
+
+
+    ## Return
+    return spherical_angles
+
+def spherical_angles_anatomical_ordering():
+    """Return the order of spherical angles in a way that might make sense
+    
+    TODO: relabel with anatomical names like "shoulder_rotation"
+    """
+    res = [
+        # Left forelimbs
+        (    'SpineF_ShoulderL', 'azim_demeaned'),
+        (    'SpineF_ShoulderL',          'elev'),
+        (    'ShoulderL_ElbowL',          'elev'),
+        (       'ElbowL_WristL',          'elev'), # 3
+        (     'WristL_ForepawL',          'elev'),
+        (    'ShoulderL_ElbowL', 'azim_demeaned'),
+        (       'ElbowL_WristL', 'azim_demeaned'), # 6
+        
+        # Right forelimbs
+        (    'SpineF_ShoulderR', 'azim_demeaned'),
+        (    'SpineF_ShoulderR',          'elev'),
+        (    'ShoulderR_ElbowR',          'elev'),
+        (       'ElbowR_WristR',          'elev'), # 10
+        (     'WristR_ForepawR',          'elev'),
+        (    'ShoulderR_ElbowR', 'azim_demeaned'),
+        (       'ElbowR_WristR', 'azim_demeaned'), # 13
+
+        # Left hindlimbs
+        (        'SpineM_KneeL',          'elev'),
+        (        'KneeL_AnkleL',          'elev'),
+        (     'AnkleL_HindpawL',          'elev'), # 16
+        (        'SpineM_KneeL', 'azim_demeaned'),
+        (        'KneeL_AnkleL', 'azim_demeaned'), # 18
+        
+        # Right hindlimbs
+        (        'SpineM_KneeR',          'elev'),
+        (        'KneeR_AnkleR',          'elev'),
+        (     'AnkleR_HindpawR',          'elev'), # 21
+        (        'SpineM_KneeR', 'azim_demeaned'),
+        (        'KneeR_AnkleR', 'azim_demeaned'), # 23
+
+        # Head
+        (         'SpineF_EarL',          'elev'),
+        (         'SpineF_EarR',          'elev'), # 25      
+        (        'SpineF_Snout',          'elev'),
+        (        'SpineF_Snout', 'azim_demeaned'),
+        
+        # Tail
+        (   'SpineM_Tail(base)',          'elev'),
+        ('Tail(base)_Tail(mid)',          'elev'), # 29
+        ( 'Tail(mid)_Tail(end)',          'elev'),
+        (   'SpineM_Tail(base)', 'azim_demeaned'),
+        ]
+    
+    return res
+
 def reconstruct_cartesian_from_spherical(spherical_angles_d):
     """Invert compute_spherical_joint_angles to recover cartesian keypoints.
     
