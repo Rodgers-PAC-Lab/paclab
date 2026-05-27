@@ -1,0 +1,84 @@
+[general]
+# Full path to the project directory
+projectPath = ""
+
+# Number of low-d features
+pcaModes = 0
+
+# Number of processors to use for wavelet calculation and embedding 
+# (if not using GPU). Set to -1 to use all
+numProcessors = 12
+useGPU = -1
+
+# TSNE or UMAP
+method = "TSNE"
+
+[wavelet]
+waveletDecomp = true
+
+# Number of dyadically spaced frequencies between minF and maxF
+numPeriods = 25
+
+# dimensionless Morlet wavelet parameter
+omega0 = 5
+
+# Sampling rate
+samplingFreq = 100
+
+# Minimum and maximum frequency for Morlet Wavelet Transform
+minF = 1
+maxF = 50
+
+
+[tSNE]
+# can be 'barnes_hut' or 'exact'. barnes_hut is for speed
+tSNE_method = 'barnes_hut'
+
+# %2^H (H is the transition entropy)
+perplexity = 32
+
+# Lower this if you get memory error when re-embedding points on a learned map
+embedding_batchsize = 20000
+
+# maximum number of iterations for the Nelder-Mead algorithm
+maxOptimIter = 100
+
+# number of points in the subsampled training set
+trainingSetSize = 35000
+
+# number of neigbors to use when re-embedding
+maxNeighbors = 200
+
+# local neighborhood definition in training set creation
+kdNeighbors = 5
+
+# tSNE training set perplexity
+training_perplexity = 20
+
+# number of points in mini-trainings
+training_numPoints = 10000
+
+# minimum training set template length
+minTemplateLength = 1
+
+[UMAP]
+# size of local neighborhood for UMAP
+n_neighbors = 15
+
+# negative sample rate while training
+train_negative_sample_rate = 5
+
+# negative sample rate while embedding new data
+embed_negative_sample_rate = 1
+
+# minimum distance between neighbors
+min_dist = 0.1
+
+# umap output dimensions
+umap_output_dims = 2
+
+# number of training epochs
+n_training_epochs = 1000
+
+# embedding rescaling parameter
+rescale_max = 100
