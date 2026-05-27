@@ -8,6 +8,81 @@ import pandas
 import matplotlib.pyplot as plt
 import my.plot
 
+def load_slp_data1(labels):
+    """Load data from sleap.Labels into numpy array
+    
+    Iterating over the labels is slow. The numpy() method is fast, but
+    inaccurate when the frame_idx isn't range-like
+    """
+    df_l = []
+    df_keys_l = []
+    for n_frame, labeled_frame in enumerate(labels):
+        assert len(labeled_frame.instances) == 1
+        points = labeled_frame.instances[0].points
+        
+        df = pandas.DataFrame.from_dict({
+            'x': points['xy'][:, 0],
+            'y': points['xy'][:, 1],
+            'visible': points['visible'],
+            'score': points['score'],
+            'node_name': points['name'],
+            })
+        df = df.set_index('node_name')
+        df_l.append(df)
+        
+        # If we don't trust the frame_idx
+        # df_keys_l.append(n_frame)
+        
+        # If we do
+        df_keys_l.append(labeled_frame.frame_idx)
+
+    # Concat
+    points = pandas.concat(
+        df_l, keys=df_keys_l, names=['frame_number'])
+    
+    # Return
+    return points
+
+def load_slp_data2(labels):
+    """Load predictions from an SLP file.
+    
+    This methods uses .numpy() which is faster but doesn't work well when
+    there are missing frames.
+    """
+    # Slice out single animal
+    # Shape will be n_frames, n_nodes, 3
+    pred_points_arr = preds.numpy(return_confidence=True)[:, 0]
+    
+    # DataFrame it
+    n_frames = len(preds)
+    n_nodes = len(preds.skeleton.node_names)
+    n_coords = 3
+    coords = ['x', 'y', 'score']
+    pred_points = pandas.DataFrame(
+        pred_points_arr.reshape((n_frames, (n_nodes * n_coords))),
+        index=pandas.Series(range(n_frames), name='frame_number'),
+        columns=pandas.MultiIndex.from_product([
+            pandas.Series(preds.skeleton.node_names, name='node_name'),
+            pandas.Series(['x', 'y', 'score'])
+            ])
+        ).stack('node_name', future_stack=True)
+    
+    # Nullify
+    null_mask = pred_points['score'] < best_model_thresh
+    pred_points.loc[null_mask, ['x', 'y']] = np.nan
+    
+    # Unstack like the old way
+    tracks_df = pred_points.drop('score', axis=1).unstack(
+        'node_name').swaplevel(axis=1).sort_index(axis=1)
+    tracks_df.columns.names = ['node', 'coord']
+    scores_df = pred_points['score'].unstack('node_name')
+    scores_df.columns.name = 'node'
+
+    return {
+        'tracks_df': tracks_df,
+        'scores_df': scores_df,
+        }
+
 def load_tracked_sleap_data(hdf5_filename):
     """Load tracks and scores from sleap HDF5 file
     
