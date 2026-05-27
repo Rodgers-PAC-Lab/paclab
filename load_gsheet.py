@@ -350,7 +350,6 @@ def load_persons_metadata_sheet(person, drop_long_columns=True):
 
     return df
 
-
 def abigail_sheet(drop_long_columns=True):
     """See docstring in load_persons_metadata_sheet"""
     print(
@@ -373,3 +372,66 @@ def munged_sessions():
     """Return the list of munged sessions"""
     sheet = load('1gOlX4hvBkH_MmcGBmANqQg8sLBrOivs_S_ZB7BUfqD8')
     return sheet
+
+def lucas_metadata(engine='openpyxl'):
+    """Load Lucas' metadata google spreadsheet
+    
+    Each sheet contains a different table of data.
+    TODO: Doc each one 
+    
+    Returns : dict of DataFrames, one per sheet
+        'important_mice'
+        'histology'
+        'video_sessions'
+        'calibration_sessions'
+        'behavior_trials'
+        'climb_counts'
+        'dannce_sessions'
+        'sorted_data'
+    """
+    # Google Sheets Excel export link
+    url = (
+        'https://docs.google.com/spreadsheets/d/' # google prefix
+        '1O_m3uA2N8ixks4wwUm9NeLj7j6edI-voIXnLBAsa0TQ/' # doc ID for Mitopark project metadata 
+        'export?format=xlsx' # export as Excel
+    )
+
+    # Skip these sheets
+    skip_sheets = [
+        'unsorted data',
+        ]    
+    
+    # Fetch the sheet
+    request_data = requests.get(url)
+
+    # Raise error if download failed
+    if not request_data.ok:
+        raise ValueError(
+            f'could not load gsheet {doc_id}; '
+            f'status {request_data.status_code}; is it publicly shared?')
+
+    # Read
+    content = io.BytesIO(request_data.content)
+
+    # Parse each sheet into a dict
+    res_d = {}
+    with pandas.ExcelFile(content, engine=engine) as excel_file:
+        
+        # Iterate over sheets
+        for name in excel_file.sheet_names:
+            
+            # Optionally skip sheet
+            if name in skip_sheets:
+                continue
+            
+            # Read this sheet
+            sheet = pandas.read_excel(  
+                excel_file, sheet_name=name, engine=engine)
+            
+            # Label row numbers starting with 2 to match google sheet
+            sheet.index = sheet.index.values + 2
+            
+            # Store
+            res_d[name] = sheet
+
+    return res_d
