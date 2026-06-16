@@ -1,6 +1,21 @@
 """Catchall module for useful functions"""
 
 import matplotlib.mlab
+import numpy as np
+
+def take_equally_spaced(arr, n):
+    """Take n equally spaced elements from arr
+    
+    We avoid the endpoints. So, divide the array into n+1 segments, and
+    take the highest point of each segment, discarding the last.
+    """
+    # e.g., we want 2 equally spaced, so they are at 1/3 and 2/3
+    arr = np.asarray(arr)
+    first_element_relative = 1.0 / (n + 1)
+    relative_pos = np.linspace(
+        first_element_relative, 1 - first_element_relative, n)
+    absolute_pos = np.rint((len(arr) - 1) * relative_pos).astype(int)
+    return arr[absolute_pos]
 
 def rint(arr):
     """Round with rint and cast to int
