@@ -33,10 +33,24 @@ def choose_sandboxes_to_enter(
         The sandbox name should be '{dt_string}_{mouse_name}' where
         `dt_string` is a 19-character string like '2024-10-11_17-26-20'
     
-    include_sessions, mouse_names, munged_sessions :
-        passed directly from parse_sandboxes, see documentation there
+    include_sessions : list of string, or None
+        At least one of `include_sessions` or `mouse_names` must not be None
+        If `include_sessions` is not None, then it must be a list, and only
+        sessions in that list will be included. Also in this case, `mouse_names`
+        is ignored (i.e., this argument takes precedence).
+    
+    mouse_names : list of string, or None
+        At least one of `include_sessions` or `mouse_names` must not be None
+        If `include_sesions` is None and `mouse_names` is not None, then 
+        only mice in this list will be included.
+    
+    munged_sessions : list of string
+        A list of session names to drop
     
     Returns: DataFrame
+        This has EVERY session in it, not just the ones you requested
+        Filter by 'enter_sandbox' to get what you need
+    
         columns:
             full_path : full path to sandbox
             sandbox_name : name of sandbox (last bit of full_path)
@@ -216,7 +230,7 @@ def load_session(
     """
     ## Error check
     if octopilot_session_name is None:
-        raise ArgumentError('octopilot session name cannot be None')
+        raise ValueError('octopilot session name cannot be None')
     
     
     ## Form session dir
