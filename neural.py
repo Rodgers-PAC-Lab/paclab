@@ -756,8 +756,8 @@ def load_open_ephys_data(directory, recording_idx=0, convert_to_microvolts=True)
 
     # Convert to array and get into physical units
     if convert_to_microvolts:
-        neural_data = neural_data * metadata['bit_volts'][0]
-        analog_data = analog_data * metadata['bit_volts'][-1]
+        neural_data = neural_data * metadata.bit_volts[0]
+        analog_data = analog_data * metadata.bit_volts[-1]
     
     # Return
     return {
