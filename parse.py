@@ -815,7 +815,7 @@ def label_trial_outcome(big_poke_df, big_trial_df):
     # The best is 0 (correct trial) and the worst is 6 (because consumption port
     # is ignored). The expectation under random choices is 3
     lbpd_ranked = lbpd_unstacked.rank(
-        method='first', axis=1).stack().astype(int) - 1
+        method='first', axis=1).stack().dropna().astype(int) - 1
 
     # Exception: RCP can be 7 on the first trial of the session, because no PRP
     assert lbpd_ranked.drop(0, level='trial').max() <= 6
