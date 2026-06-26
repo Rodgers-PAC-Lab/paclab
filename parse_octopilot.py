@@ -25,6 +25,15 @@ def choose_sandboxes_to_enter(
     ):
     """Identify which sandboxes to enter for a given mouse or session list
     
+    All sandboxes will be included if they
+    * Are in a year-like directory beginning with "20"
+    * root/year/month/session/trials.csv exists
+    * mouse is in mouse_names and session is not in munged_sessions, as 
+      described further below
+    No other quality checks are performed. In particular, sessions with zero
+    trials are still included. It's too expensive to check if the file
+    contains more than a header row.
+    
     sandbox_root_dir : str
         Path to the root directory containing octopilot logs
         Within `sandbox_root_dir` should be a folder for each year, and
