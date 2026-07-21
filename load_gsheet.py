@@ -193,6 +193,13 @@ def load_persons_metadata_sheet(person, drop_long_columns=True):
             'export?format=xlsx' # export command
             )    
     
+    elif person == 'rowan':
+        url = (
+            'https://docs.google.com/spreadsheets/d/' # google prefix
+            '1kQlR21M0Xj131z2duTdFaHvmlYL_HVK0g_AsMD4BAek/' # doc ID
+            'export?format=xlsx' # export command
+            )
+    
     else:
         raise ValueError(f'unsupported person: {person}')
 
@@ -347,7 +354,7 @@ def load_persons_metadata_sheet(person, drop_long_columns=True):
         # Store
         df.loc[
             sta_index, 'analog_packed_filename'] = analog_packed_filename
-
+    
     return df
 
 def abigail_sheet(drop_long_columns=True):
