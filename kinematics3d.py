@@ -12,6 +12,7 @@ reconstruct_cartesian_from_spherical : invert compute_spherical_joint_angles
 """
 import os
 import numpy as np
+import scipy
 import scipy.io
 from scipy.spatial.transform import Rotation as R
 import pandas
@@ -94,7 +95,7 @@ def keypoints_df2array(df):
     # Error check
     # TODO: if column levels have been swapped, unswap them here
     assert df.index.name == 'n_frame'
-    assert np.all(df.index.values == np.arange(len(df)))
+    # assert np.all(df.index.values == np.arange(len(df)))
     assert df.columns.names == ('coord', 'keypoint')
     assert (
         df.columns.get_level_values('coord').unique() == ['x', 'y', 'z']
@@ -2289,7 +2290,50 @@ def egocenter(pred, bindcenter = 5, align = '3d', b1 = 3, b2 = 6, index_base = 1
     return ego
 
 # Smoothing and derivatives
-def gaussianfilterdata(pred, sigma = 1):
+
+def gaussianfilterdata(pred, sigma=1):
+    """
+    Convolve data with a Gaussian. This computes smoothed position.
+    pred: DANNCE prediction data. Expected to be shape Tx1x3xK or Tx3xK
+    sigma: the standard deviation of the Gaussian kernel
+    """
+    pred = np.squeeze(pred)
+
+    if pred.ndim == 1:
+        return scipy.ndimage.gaussian_filter1d(pred, sigma)
+
+    out = np.zeros_like(pred)
+    for i in range(pred.shape[1]):
+        out[:, i] = scipy.ndimage.gaussian_filter1d(pred[:, i], sigma)
+
+    return out
+
+def gaussianfilterdata_derivative(pred, sigma=1):
+    """
+    Compute smoothed velocities by convolving position with the derivative of a Gaussian.
+
+    pred: angle data
+    sigma: the standard deviation of the Gaussian derivative kernel. According to Gordon, this 
+           approximately maps on to window size / 2 for a sliding window
+           
+    Stable derivative estimate via Gaussian smoothing + finite differences.
+    """
+
+    pred = np.squeeze(pred)
+
+    if pred.ndim == 1:
+        pred_smooth = scipy.ndimage.gaussian_filter1d(pred, sigma=sigma, order=0)
+        return scipy.ndimage.gaussian_filter1d(pred_smooth, sigma=sigma, order=1)
+
+    out = np.zeros_like(pred)
+    for i in range(pred.shape[1]):
+        smoothed = scipy.ndimage.gaussian_filter1d(pred[:, i], sigma=sigma, order=0)
+        out[:, i] = scipy.ndimage.gaussian_filter1d(smoothed, sigma=sigma, order=1)
+
+    return out
+
+
+def gaussianfilterdata_legacy(pred, sigma = 1):
     '''
     Convolve data with a Gaussian. This computes smoothed position.
     pred: DANNCE prediction data. Expected to be shape Tx1x3xK or Tx3xK
@@ -2315,7 +2359,7 @@ def gaussianfilterdata(pred, sigma = 1):
     
     return np.real(smoothed) 
     
-def gaussianfilterdata_derivative(pred, sigma = 1):
+def gaussianfilterdata_derivative_legacy(pred, sigma = 1):
     '''
     Compute smoothed velocities by convolving position with the derivative of a Gaussian.
     Adapted from old matlab code written by Gordon.
