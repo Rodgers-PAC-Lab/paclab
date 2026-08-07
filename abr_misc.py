@@ -5,6 +5,7 @@ import pandas
 import socket
 import os
 import json
+import my.plot
 
 def get_metadata(data_directory, datestring, metadata_version):
     """Get the metadata from a day of recordings
@@ -174,24 +175,24 @@ def laterality_check(channel, speaker_side):
     LR doesn't really have an ipsilateral or contralateral side since it records from both ears.
 
     Parameters:
-        channel: string 'LV' or 'RV', which channel the data is from
+        channel: string 'LV', 'VL', 'VR', or 'RV', which channel the data is from
         speaker_side: string 'L' or 'R', which side the speaker plays on
 
     Returns:
         laterality: string 'ipsilateral' or 'contralateral'. Returns np.nan if it gets invalid input.
     """
     if speaker_side == 'L':
-        if channel == 'LV':
+        if channel == 'LV' or channel=='VL':
             laterality = 'ipsilateral'
-        elif channel == 'RV':
+        elif channel == 'RV' or channel=='VR':
             laterality = 'contralateral'
         else:
             print("Invalid channel and speaker side config: ",channel,speaker_side)
             laterality = np.nan
     elif speaker_side == 'R':
-        if channel == 'RV':
+        if channel == 'RV' or channel=='VR':
             laterality = 'ipsilateral'
-        elif channel == 'LV':
+        elif channel == 'LV' or channel=='VL':
             laterality = 'contralateral'
         else:
             print("Invalid channel and speaker side config: ", channel, speaker_side)
@@ -277,21 +278,82 @@ def join_cohort_info_to_df(df, cohort_experiments, join_on=['date','mouse'],
     df.index = pandas.MultiIndex.from_frame(df_idx)
     return df
 
-def plot_single_ax_abr(abr_subdf, ax, sampling_rate=16000):
+def plot_single_ax_abr(abr_subdf, ax, sampling_rate=16000, title=''):
     """
     PARAMETERS:
         abr_subdf: a subdf where the index is sound levels and the columns are voltages
         ax: the axis to plot it on
         t: the x axis in ms
+        title: title for the axis
     RETURNS:
         ax: the axis object with the plot made
     """
     t = abr_subdf.columns/sampling_rate*1000
     for label_i in abr_subdf.index.sort_values(ascending=False):
-        aut_colorbar = generate_colorbar(
-            len(abr_subdf.index), mapname='inferno_r', start=0.15, stop=1)
+        aut_colorbar = my.plot.generate_colorbar(
+            len(abr_subdf.index),  mapname='inferno', start=0, stop=0.85)
         color_df = pandas.DataFrame(aut_colorbar,
                                     index=abr_subdf.index.sort_values(ascending=True))
         ax.plot(t, abr_subdf.loc[label_i].T * 1e6, lw=.75,
                 color=color_df.loc[label_i], label=label_i)
+        ax.set_title(title)
     return ax
+
+
+def match_convention(big_triggered_neural, convention):
+    """
+    PARAMETERS:
+        big_triggered_neural: Output from the loading_aligning step.
+            Dataframe with index ['recording', 'label', 'polarity', 't_samples', 'channel'] and
+            columns are time series of voltages
+        convention: Whether you want to plot any vertex-ear data as 'vertex-positive' or 'vertex-negative'
+    RETURNS:
+        big_triggered_neural: The original big_triggered_neural, with all vertex-ear channels sign-flipped and renamed to match the chosen convention
+    """
+    # Swaps signs to make all channels either vertex-positive or vertex-negative
+
+    # Get channel names
+    big_triggered_neural = big_triggered_neural.reset_index('channel')
+    channel_l = big_triggered_neural['channel'].unique()
+    big_triggered_neural = big_triggered_neural.reset_index().set_index(
+        ['channel', 'recording', 'label', 'polarity', 't_samples'])
+
+    if convention == 'vertex-negative':
+        if 'VL' in channel_l or 'VR' in channel_l:
+            # VL and VR mean it's recorded as vertex-positive
+            # Flip the sign on these channels to match convention
+
+            # List which channels need to get flipped and which don't
+            channels_to_flip = [x for x in channel_l if x[0] == 'V']
+            channels_dont_flip = np.setdiff1d(channel_l, channels_to_flip)
+    elif convention == 'vertex-positive':
+        if 'LV' in channel_l or 'RV' in channel_l:
+            # LV and RV mean it's recorded as vertex-negative
+            # List which channels need to get flipped and which don't
+            channels_to_flip = [x for x in channel_l if x[1] == 'V']
+            channels_dont_flip = np.setdiff1d(channel_l, channels_to_flip)
+    else:
+        # If 'convention' isn't 'vertex-positive' or 'vertex-negative',
+        # print an error and return the original data
+        print('Warning: ' + convention + ' is not a recognized convention')
+        return big_triggered_neural
+
+    # Flip the sign to match convention
+    neural_list = []
+    for channel in channels_to_flip:
+        # Get triggered neural and flip the ones that need to be flipped
+        flipped_trig_neural = -big_triggered_neural.loc[[channel]]
+
+        # Rename the channel to indicate it's flipped
+        flipped_trig_neural = flipped_trig_neural.rename({channel: channel[1] + channel[0]}, level='channel')
+        neural_list.append(flipped_trig_neural)
+
+    # Append the ones that never needed flipping
+    neural_list.append(big_triggered_neural.loc[channels_dont_flip])
+
+    # Concat the flipped and unflipped ones
+    big_triggered_neural = pandas.concat(neural_list)
+    # Set the index back like it was
+    big_triggered_neural = big_triggered_neural.reset_index().set_index(
+        ['recording', 'label', 'polarity', 't_samples', 'channel'])
+    return big_triggered_neural
