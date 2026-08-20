@@ -14,7 +14,8 @@ import os
 import numpy as np
 import scipy
 import scipy.io
-from scipy.spatial.transform import Rotation as R
+import combinations
+import scipy.spatial
 import pandas
 import pickle
 
@@ -1125,6 +1126,355 @@ def _parse_labeled_points(data):
     
     return big_points, points_3d
 
+def _compute_camera_boundary_planes(camera_parameters, depths=(0,1000), image_size=(1280, 720)):
+    camera_names = camera_parameters["K"].index.get_level_values("camera")
+    A_dict = {}
+    b_dict = {}
+    
+    for camera in camera_names:
+        R = np.asarray(
+            camera_parameters["rotation_matrix"].xs(camera, level="camera")
+        ).squeeze()
+        
+        t = np.asarray(
+            camera_parameters["translation_vector"].loc[camera]
+        ).squeeze()
+        
+        K = np.asarray(camera_parameters["K"].xs(camera, level="camera")).squeeze()
+    
+        # Extract focal lengths and compute FOV slopes
+        fx = K[0,0]
+        fy = K[1,1]
+        slope_x = 0.5*image_size[0] / fx
+        slope_y = 0.5*image_size[1]/ fy
+    
+        # Compute matrix A, which is a 6x3 matrix containing bounding plane orientations
+        A = np.zeros((6,3))
+        A[0, :] = R[:, 0] - slope_x * R[:, 2]
+        A[1, :] = -R[:, 0] - slope_x * R[:, 2]
+        
+        A[2, :] = R[:, 1] - slope_y * R[:, 2]
+        A[3, :] = -R[:, 1] - slope_y * R[:, 2]
+        
+        A[4, :] = -R[:, 2]
+        A[5, :] = R[:, 2]
+    
+        # Compute matrix b, which is a 6x1 vector containing bounding plane offsets
+        b = np.array([
+        -t[0] + slope_x * t[2],
+        t[0] + slope_x * t[2],
+        -t[1] + slope_y * t[2],
+        t[1] + slope_y * t[2],
+        -depths[0] + t[2],
+        depths[1] - t[2],
+        ])
+
+        A_dict[camera] = A
+        b_dict[camera] = b
+
+    return A_dict, b_dict
+
+
+def find_polyhedron_vertices(A, b, tol=1e-9, mode="intersect"):
+    """
+    Find vertices associated with the intersection or union of convex
+    polyhedra.
+
+    Parameters
+    ----------
+    A : ndarray
+        Shape (N_cameras, 6, 3).
+
+        A[i] contains the six plane normals for camera i.
+
+    b : ndarray
+        Shape (N_cameras, 6).
+
+        b[i] contains the six plane offsets for camera i.
+
+    tol : float
+        Numerical tolerance for plane degeneracy and inequality tests.
+
+    mode : {"intersect", "union"}
+        "intersect":
+            Find vertices of the intersection of all camera frustums.
+
+        "union":
+            Find vertices of the individual camera frustums and combine
+            them into one array.
+
+    Returns
+    -------
+    vertices : (M, 3) ndarray
+        Candidate vertices.
+
+    Notes
+    -----
+    For "intersect", all 6*N_cameras inequalities must be satisfied.
+
+    For "union", the returned points are the vertices of the individual
+    frustums. This is sufficient for constructing the convex hull of the
+    union, but ConvexHull(vertices) is NOT the exact volume of a
+    non-convex union.
+    """
+
+    A = np.asarray(A, dtype=float)
+    b = np.asarray(b, dtype=float)
+
+    if A.ndim != 3 or A.shape[1:] != (6, 3):
+        raise ValueError(
+            "A must have shape (N_cameras, 6, 3)"
+        )
+
+    if b.shape != (A.shape[0], 6):
+        raise ValueError(
+            "b must have shape (N_cameras, 6)"
+        )
+
+    n_cameras = A.shape[0]
+
+    if mode == "intersect":
+
+        # Combine all camera constraints
+        A_flat = A.reshape(-1, 3)
+        b_flat = b.reshape(-1)
+
+        vertices = []
+
+        # Every vertex is defined by three boundary planes
+        for i, j, k in itertools.combinations(range(len(b_flat)), 3):
+
+            M = A_flat[[i, j, k], :]
+            q = b_flat[[i, j, k]]
+
+            # Skip parallel / degenerate plane combinations
+            if abs(np.linalg.det(M)) < tol:
+                continue
+
+            # Intersection of the three planes
+            p = np.linalg.solve(M, q)
+
+            # Must satisfy every camera's constraints
+            if np.all(A_flat @ p <= b_flat + tol):
+                vertices.append(p)
+
+    elif mode == "union":
+
+        vertices = []
+
+        # Find the vertices of each individual camera frustum
+        for camera in range(n_cameras):
+
+            A_camera = A[camera]
+            b_camera = b[camera]
+
+            for i, j, k in itertools.combinations(range(6), 3):
+
+                M = A_camera[[i, j, k], :]
+                q = b_camera[[i, j, k]]
+
+                # Skip degenerate plane combinations
+                if abs(np.linalg.det(M)) < tol:
+                    continue
+
+                # Intersection of the three planes
+                p = np.linalg.solve(M, q)
+
+                # Must lie inside this camera's frustum
+                if np.all(A_camera @ p <= b_camera + tol):
+                    vertices.append(p)
+
+    else:
+        raise ValueError(
+            "mode must be either 'intersect' or 'union'"
+        )
+
+    if not vertices:
+        return np.empty((0, 3))
+
+    vertices = np.asarray(vertices)
+
+    # Remove duplicate vertices
+    vertices = np.unique(
+        np.round(vertices, decimals=10),
+        axis=0
+    )
+
+    return vertices
+
+def compute_visible_hull(camera_parameters, depths=(0, 1000), mode="intersect"):
+    A_dict, b_dict = _compute_camera_boundary_planes(
+        camera_parameters,
+        depths=depths
+    )
+
+    A = np.array(list(A_dict.values()))
+    b = np.array(list(b_dict.values()))
+
+    vertices = find_polyhedron_vertices(
+        A,
+        b,
+        mode=mode
+    )
+
+    hull = scipy.spatial.ConvexHull(vertices)
+
+    return hull
+
+def combine_convex_hulls(hulls, mode="intersect", tol=1e-9):
+    """
+    Combine an arbitrary number of scipy.spatial.ConvexHull objects.
+
+    Parameters
+    ----------
+    hulls : sequence of scipy.spatial.ConvexHull
+        Convex hulls to combine.
+
+    mode : {"intersect", "union"}
+        "intersect":
+            Compute the geometric intersection of all hulls.
+
+        "union":
+            Compute the convex hull of the union of all hulls.
+
+            Note that this is generally NOT the literal non-convex
+            union. It is:
+
+                conv(hull_1 ∪ hull_2 ∪ ... ∪ hull_N)
+
+    tol : float
+        Numerical tolerance used when testing whether candidate
+        vertices satisfy the half-space constraints.
+
+    Returns
+    -------
+    hull : scipy.spatial.ConvexHull
+        Convex hull representing the requested result.
+
+    Raises
+    ------
+    ValueError
+        If no hulls are supplied, the intersection is empty, or the
+        intersection is lower-dimensional.
+    """
+
+    if mode not in ("intersect", "union"):
+        raise ValueError("mode must be 'intersect' or 'union'")
+
+    if len(hulls) == 0:
+        raise ValueError("At least one hull is required.")
+
+    if len(hulls) == 1:
+        return hulls[0]
+
+    # ---------------------------------------------------------------
+    # UNION
+    # ---------------------------------------------------------------
+    if mode == "union":
+
+        # The convex hull of the union is the convex hull of all
+        # vertices from all input hulls.
+        points = np.vstack([
+            hull.points[hull.vertices]
+            for hull in hulls
+        ])
+
+        return scipy.spatial.ConvexHull(points)
+
+    # ---------------------------------------------------------------
+    # INTERSECTION
+    # ---------------------------------------------------------------
+
+    # scipy ConvexHull.equations gives boundary planes in the form
+    #
+    #     normal @ x + offset <= 0
+    #
+    # for points inside the hull.
+    #
+    # Stack the half-space constraints from every hull.
+    A = np.vstack([
+        hull.equations[:, :3]
+        for hull in hulls
+    ])
+
+    b = -np.concatenate([
+        hull.equations[:, 3]
+        for hull in hulls
+    ])
+
+    vertices = []
+
+    # A vertex of the intersection occurs at the intersection of
+    # three boundary planes.
+    for i, j, k in itertools.combinations(range(len(b)), 3):
+
+        M = A[[i, j, k]]
+        q = b[[i, j, k]]
+
+        # Skip parallel / degenerate plane combinations
+        if abs(np.linalg.det(M)) < tol:
+            continue
+
+        # Intersection of the three planes
+        p = np.linalg.solve(M, q)
+
+        # Check whether p lies inside EVERY hull.
+        if np.all(A @ p <= b + tol):
+            vertices.append(p)
+
+    if not vertices:
+        raise ValueError("The hulls do not have a common 3D intersection.")
+
+    vertices = np.asarray(vertices)
+
+    # Remove duplicate vertices
+    vertices = np.unique(
+        np.round(vertices, decimals=10),
+        axis=0
+    )
+
+    if len(vertices) < 4:
+        raise ValueError(
+            "The intersection is lower-dimensional and has no 3D volume."
+        )
+
+    return scipy.spatial.ConvexHull(vertices)
+
+
+def points_inside_hull(X, Y, Z, hull, tol=1e-9):
+    """
+    Return a boolean array indicating which grid points lie inside
+    a scipy.spatial.ConvexHull.
+
+    X, Y, Z : ndarray
+        Coordinate arrays with identical shape.
+
+    hull : scipy.spatial.ConvexHull
+
+    Returns
+    -------
+    inside : ndarray of bool
+        Same shape as X, indicating whether each point is inside hull.
+    """
+
+    points = np.column_stack([
+        X.ravel(),
+        Y.ravel(),
+        Z.ravel()
+    ])
+
+    # hull.equations:
+    # [a, b, c, d], with a*x + b*y + c*z + d <= 0 inside
+    equations = hull.equations
+
+    inside = np.all(
+        points @ equations[:, :3].T + equations[:, 3] <= tol,
+        axis=1
+    )
+
+    return inside.reshape(X.shape)
+
+
 def get_skeleton():
     """Return the keypoints and edges in the mouse22 skeleton
     
@@ -1568,7 +1918,7 @@ def compute_euler_angles(rot, degrees = True, order = 'zyx'):
     R_matrices_flat = rot.reshape(-1, 3, 3)
     
     # Create batched Rotation object
-    R_obj = R.from_matrix(R_matrices_flat)
+    R_obj = scipy.spatial.transform.Rotation.from_matrix(R_matrices_flat)
     
     # Decompose using desired order (e.g., 'zyx')
     angles = R_obj.as_euler(order, degrees = degrees)  # shape: (T*M, 3)
