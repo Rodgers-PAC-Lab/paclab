@@ -318,6 +318,8 @@ def match_convention(big_triggered_neural, convention):
     big_triggered_neural = big_triggered_neural.reset_index().set_index(
         ['channel', 'recording', 'label', 'polarity', 't_samples'])
 
+    channels_to_flip = []
+    channels_dont_flip = []
     if convention == 'vertex-negative':
         if 'VL' in channel_l or 'VR' in channel_l:
             # VL and VR mean it's recorded as vertex-positive
@@ -339,20 +341,21 @@ def match_convention(big_triggered_neural, convention):
         return big_triggered_neural
 
     # Flip the sign to match convention
-    neural_list = []
-    for channel in channels_to_flip:
-        # Get triggered neural and flip the ones that need to be flipped
-        flipped_trig_neural = -big_triggered_neural.loc[[channel]]
+    if len(channels_to_flip)>0:
+        neural_list = []
+        for channel in channels_to_flip:
+            # Get triggered neural and flip the ones that need to be flipped
+            flipped_trig_neural = -big_triggered_neural.loc[[channel]]
 
-        # Rename the channel to indicate it's flipped
-        flipped_trig_neural = flipped_trig_neural.rename({channel: channel[1] + channel[0]}, level='channel')
-        neural_list.append(flipped_trig_neural)
+            # Rename the channel to indicate it's flipped
+            flipped_trig_neural = flipped_trig_neural.rename({channel: channel[1] + channel[0]}, level='channel')
+            neural_list.append(flipped_trig_neural)
 
-    # Append the ones that never needed flipping
-    neural_list.append(big_triggered_neural.loc[channels_dont_flip])
+        # Append the ones that never needed flipping
+        neural_list.append(big_triggered_neural.loc[channels_dont_flip])
 
-    # Concat the flipped and unflipped ones
-    big_triggered_neural = pandas.concat(neural_list)
+        # Concat the flipped and unflipped ones
+        big_triggered_neural = pandas.concat(neural_list)
     # Set the index back like it was
     big_triggered_neural = big_triggered_neural.reset_index().set_index(
         ['recording', 'label', 'polarity', 't_samples', 'channel'])

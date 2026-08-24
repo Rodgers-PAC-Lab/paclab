@@ -70,10 +70,9 @@ def get_video_timing_metadata(video_filenames, verbose=False):
     df = pandas.DataFrame.from_records(
         res_l, columns=['filename', 'start', 'mod'])
     df['approx_duration_video'] = df['mod'] - df['start']
-    
     return df
 
-def _match_videos_with_behavior(video_time, behavior_time, offset, threshold=10):
+def _match_videos_with_behavior(video_time, behavior_time, offset=7, threshold=10):
     """Align video times and behavior times
     
     Parameters
@@ -107,7 +106,7 @@ def _match_videos_with_behavior(video_time, behavior_time, offset, threshold=10)
             This is always positive
     """
     # Apply the offset
-    video_time = video_time - datetime.timedelta(seconds=7)
+    video_time = video_time - datetime.timedelta(seconds=offset)
     
     # Sometimes there are behavior sessions with no matched video
     # That can really screw up the hungarian because they'll be aligned to
@@ -139,12 +138,12 @@ def _match_videos_with_behavior(video_time, behavior_time, offset, threshold=10)
         aligned_l.append((video_filename, session_name, cost))
     aligned_df = pandas.DataFrame.from_records(
         aligned_l, columns=['video_filename', 'session_name', 'cost'])
-
+    
     # Anything with a cost more than 3 is missing
     aligned_df = aligned_df[aligned_df['cost'] < threshold]
     return aligned_df
-
-def match_videos_with_behavior(video_dir, session_df, quiet=False, threshold=5.5):
+    
+def match_videos_with_behavior(video_dir, session_df, quiet=False, offset=7, threshold=5.5):
     """Match videos with behavior
     
     Loads all video filenames in `video_dir`. Extracts "sandbox_creation_time"
@@ -183,15 +182,12 @@ def match_videos_with_behavior(video_dir, session_df, quiet=False, threshold=5.5
     ## This is where warnings will go
     output_txt = ''
     
-    
     ## Get a list of all videos
     video_filenames = glob.glob(os.path.join(video_dir, '*.avi'))
-
 
     ## Load video timing metadata
     timing_df = get_video_timing_metadata(video_filenames)
     video_time = timing_df.set_index('filename')['start']
-    
 
     ## Align sessions and videos
     # Drop any missing sandbox_creation_time or this won't work
@@ -215,10 +211,9 @@ def match_videos_with_behavior(video_dir, session_df, quiet=False, threshold=5.5
     aligned_df = _match_videos_with_behavior(
         video_time, 
         behavior_time, 
-        offset=7,
+        offset=offset,
         threshold=threshold,
         )
-
 
     ## Form aligned_videos_df
     # Store in session_df
@@ -238,7 +233,6 @@ def match_videos_with_behavior(video_dir, session_df, quiet=False, threshold=5.5
     # Reindex as expected below
     aligned_videos_df = session_df.reset_index().set_index(
         ['date', 'mouse']).sort_index()
-
 
     ## If there are duplicate sessions by day, the rest won't work
     if aligned_videos_df.index.duplicated().any():
@@ -262,9 +256,7 @@ def match_videos_with_behavior(video_dir, session_df, quiet=False, threshold=5.5
 
             # Error check
             if len(camera_name) != 7:
-                1/0
-            
-            return camera_name
+                return camera_name
         
         ## Extract inferred camera name
         # Extract the inferred camera name from the filename
@@ -306,5 +298,5 @@ def match_videos_with_behavior(video_dir, session_df, quiet=False, threshold=5.5
     if not quiet:
         print(output_txt)
     
-    return aligned_videos_df, output_txt
+    return aligned_videos_df, output_txt, sessions_missing_video
     
