@@ -14,7 +14,7 @@ import os
 import numpy as np
 import scipy
 import scipy.io
-import combinations
+import itertools
 import scipy.spatial
 import pandas
 import pickle
