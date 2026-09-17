@@ -193,6 +193,13 @@ def load_persons_metadata_sheet(person, drop_long_columns=True):
             'export?format=xlsx' # export command
             )    
     
+    elif person == 'sukrith_hl':
+        url = (
+            'https://docs.google.com/spreadsheets/d/' # google prefix
+            '1gG2sa7tCmGnQyTF5oKsxTYvd9SzrlGZPK6WSd02nEfQ/' # doc ID
+            'export?format=xlsx' # export command
+            )   
+    
     elif person == 'rowan':
         url = (
             'https://docs.google.com/spreadsheets/d/' # google prefix
