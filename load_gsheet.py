@@ -111,7 +111,9 @@ def normalize_list_of_channels(ser):
     
     return new_values_l
 
-def load_persons_metadata_sheet(person, drop_long_columns=True):
+def load_persons_metadata_sheet(person,
+    drop_long_columns=True,
+    cuttlefish_root='~/mnt/cuttlefish/'):
     """Load data from `person`'s metadata sheet
     
     This can take some time to run, a few seconds. Sometimes up to 10 s, and
@@ -211,7 +213,8 @@ def load_persons_metadata_sheet(person, drop_long_columns=True):
         raise ValueError(f'unsupported person: {person}')
 
     # Where to look for analog path
-    analog_path = os.path.expanduser('~/mnt/cuttlefish/whitematter/d_drive')
+    analog_path = os.path.normpath(os.path.join(
+        cuttlefish_root, '/whitematter/d_drive'))
     
     # Skip these sheets
     skip_sheets = [

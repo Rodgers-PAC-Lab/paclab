@@ -127,7 +127,8 @@ def convert_dataflow_to_channel_map(dataflow):
     
     return ks_json
 
-def find_logger_and_check_xml(session_name, verbose=True):
+def find_logger_and_check_xml(session_name,
+    verbose=True, cuttlefish_root='~/mnt/cuttlefish/'):
     """Find the logger and load and check XML data
     
     Arguments
@@ -161,17 +162,17 @@ def find_logger_and_check_xml(session_name, verbose=True):
     if pandas.isnull(session_name):
         raise ValueError('session_name cannot be null')
     
-    
+    cuttlefish_root = os.path.expanduser(cuttlefish_root)
     ## Places to search for raw data
     # Neural data for raw data
     neural_root_l = [   
-        os.path.expanduser('~/mnt/cuttlefish/whitematter/20241125_HSW'),
-        os.path.expanduser('~/mnt/cuttlefish/whitematter_D/20250407_HSW_Control'),
-        os.path.expanduser('~/mnt/cuttlefish/whitematter_D/whitematter/20250407_HSW_Control'),
-        os.path.expanduser('~/mnt/cuttlefish/whitematter_D/HSW_Ostim_donotuse'),
-        os.path.expanduser('~/mnt/cuttlefish/whitematter/2024_10_HSWsoftware'),
-        os.path.expanduser('~/mnt/cuttlefish/whitematter/HSW software'),
-        os.path.expanduser('~/mnt/cuttlefish/whitematter_D/20260420_HSW_control')
+        os.path.normpath(os.path.join(cuttlefish_root, 'whitematter/20241125_HSW')),
+        os.path.normpath(os.path.join(cuttlefish_root, 'whitematter_D/20250407_HSW_Control')),
+        os.path.normpath(os.path.join(cuttlefish_root, 'whitematter_D/whitematter/20250407_HSW_Control')),
+        os.path.normpath(os.path.join(cuttlefish_root, 'whitematter_D/HSW_Ostim_donotuse')),
+        os.path.normpath(os.path.join(cuttlefish_root, 'whitematter/2024_10_HSWsoftware')),
+        os.path.normpath(os.path.join(cuttlefish_root,'whitematter/HSW software')),
+        os.path.normpath(os.path.join(cuttlefish_root,'whitematter_D/20260420_HSW_control'))
         ]
     
     
