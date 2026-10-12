@@ -214,7 +214,7 @@ def load_persons_metadata_sheet(person,
 
     # Where to look for analog path
     analog_path = os.path.normpath(os.path.join(
-        cuttlefish_root, '/whitematter/d_drive'))
+        cuttlefish_root, 'whitematter/d_drive'))
     
     # Skip these sheets
     skip_sheets = [
