@@ -236,11 +236,16 @@ def load_session(
             Index: 'name' which is the rpi
             Columns: 'ip', 'left_port_position', 'right_port_position',
                 'left_port_name', 'right_port_name'
+
+        'warnings': list
+            A list of any warnings that this got printed out
     """
     ## Error check
     if octopilot_session_name is None:
         raise ValueError('octopilot session name cannot be None')
-    
+
+    # Initialize warning list
+    warnings_l = []
     
     ## Form session dir
     octopilot_year, octopilot_month = octopilot_session_name.split('-')[:2]
@@ -310,9 +315,10 @@ def load_session(
     ## Load behavior data
     # Allow "fixing" - if trials.csv.fixed exists, load that one instead
     if os.path.exists(os.path.join(octopilot_session_dir, 'trials.csv.fixed')):
-        print(
-            f'warning: {octopilot_session_name} filename ending in *.fixed '
-            'found, using that one')
+        warn_text =   ('Filename ending in *.fixed found, using that one')
+        print(f'warning: {octopilot_session_name} {warn_text}')
+        warnings_l.append(warn_text)
+
         sounds = pandas.read_table(
             os.path.join(octopilot_session_dir, 'sounds.csv.fixed'), sep=',')
         sound_plans = pandas.read_table(
@@ -393,6 +399,7 @@ def load_session(
     ## Define session_start_time
     if len(trials) == 0:
         print(f'warning: session {octopilot_session_name} has zero trials')
+        warnings_l.append('Zero trials')
 
     else:
         # Take the time of the first trial on the desktop
@@ -472,13 +479,17 @@ def load_session(
                 
                 # Warn
                 if bad_trials.any() and not suppress_order_warnings:
-                    print(
-                        f'warning: {octopilot_session_name}: '
+                    warn_text = (f'warning: {octopilot_session_name}: '
                         f'sound_plans misaligned on {bad_trials.sum()} trials '
-                        f'for {bad_sounds_per_trial.loc[bad_trials].sum()} sounds')                
+                        f'for {bad_sounds_per_trial.loc[bad_trials].sum()} sounds')
+                    print(warn_text)
+                    warnings_l.append(
+                        (f'Sound_plans misaligned on {bad_trials.sum()} trials '
+                        f'for {bad_sounds_per_trial.loc[bad_trials].sum()} sounds'))
 
             else:
-                print(f'warning: no sound plan in {session_name}')
+                print(f'warning: no sound plan in {octopilot_session_name}')
+                warnings_l.append('No sound plan')
 
         else:
             sounds = None
@@ -500,6 +511,7 @@ def load_session(
         'mouse_params': mouse_params,
         'task_params': task_params,
         'connected_pis': connected_pis,
+        'warnings': warnings_l
         }
 
 def sync_sounds(sounds, octopilot_session_name, suppress_order_warnings=False):
