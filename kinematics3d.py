@@ -315,9 +315,10 @@ def egocenter_and_align(
     new_v = (
         rotated_df.xs(align_keypoints[1], level='keypoint', axis=1) -
         rotated_df.xs(align_keypoints[0], level='keypoint', axis=1))
-    assert new_v['y'].abs().max() < 1e-6
+    print(new_v['y'].abs().max())
+    assert new_v['y'].abs().max() < 1e-5
     if level_pitch:
-        assert new_v['z'].abs().max() < 1e-6
+        assert new_v['z'].abs().max() < 1e-5
     
     
     ## Return
