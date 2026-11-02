@@ -49,7 +49,11 @@ def find_logger(neural_root, session_name):
             'logger_', '')
         
         # See if this session exists
-        if os.path.exists(os.path.join(test_logger_dir, session_name + '.bin')):
+        # First standardize the path to tolerate it with or without .bin
+        session_path = os.path.join(test_logger_dir, session_name)
+        if session_path[-4:] != '.bin':
+            session_path = session_path + '.bin'
+        if os.path.exists(session_path):
             # Check it's not a duplicate
             if logger is not None:
                 raise IOError(

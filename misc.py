@@ -133,6 +133,10 @@ def find_ks_paths(spikesorted_dir_l, experimenter, logger_file,
     # along with a list of all valid paths for the kilosort directory
     # This lets you sanity check duplicate paths
 
+    # Make sure the logger file doesn't have .bin on the end
+    if logger_file[-4:] == '.bin':
+        logger_file = logger_file[:-4]
+
     found_paths_l = []
     # Get all the valid paths
     for search_path in spikesorted_dir_l:
@@ -141,10 +145,7 @@ def find_ks_paths(spikesorted_dir_l, experimenter, logger_file,
             found_paths_l.append(test)
     # If there's no found paths, warn and exit
     if len(found_paths_l)<1:
-        print(
-            f'cannot find spikesorted data for '
-            f'{experimenter} {mouse_name} {row} {neural_session}'
-            )
+        print(f'cannot find spikesorted data for {experimenter} {logger_file}')
         kilosort_dir = ''
         return kilosort_dir, found_paths_l
 
