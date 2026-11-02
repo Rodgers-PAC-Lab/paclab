@@ -357,6 +357,9 @@ def load_persons_metadata_sheet(person,
             'continuous/eCube_Server-105.0',
             'continuous.dat',
             )
+        # Check if it needs user expanded
+        if analog_packed_filename[0]=='~':
+            analog_packed_filename = os.path.expanduser(analog_packed_filename)
 
         # Error check it exists
         assert os.path.exists(analog_packed_filename)
