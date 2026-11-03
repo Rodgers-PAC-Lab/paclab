@@ -219,7 +219,7 @@ def load_persons_metadata_sheet(person,
     # Skip these sheets
     skip_sheets = [
         'Directories', 'Behavior_mice', 'Corrupted_files', 
-        'Visual_channel_table', 'mouse_list', 'Mice',
+        'Visual_channel_table', 'mouse_list', 'Mice', 'mouse_list_formatted'
         ]    
     
     # Skip these columns (in normalized case)
