@@ -104,7 +104,7 @@ def psd(data, NFFT=None, Fs=None, detrend='mean', window=None, noverlap=None,
 
 
 def find_ks_paths(spikesorted_dir_l, experimenter, logger_file,
-                  sorted_by=np.nan):
+                  sorted_by=np.nan, cuttlefish_root = '~/mnt/cuttlefish/'):
     """
     Find the spikesorted kilosort directory for a given single sesssion.
     Modified for Rowan and Sukrith's convention of specifying who sorted a
@@ -165,7 +165,7 @@ def find_ks_paths(spikesorted_dir_l, experimenter, logger_file,
         # make sure this is a string first
             sorted_by = sorted_by.lower()
             for search_path in found_paths_l:
-                search_path_split = search_path.split('cuttlefish')[1]
+                search_path_split = search_path.split(cuttlefish_root)[1]
                 if sorted_by in search_path_split:
                     kilosort_dir = search_path
 
