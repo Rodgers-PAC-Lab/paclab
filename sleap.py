@@ -24,10 +24,18 @@ def load_slp_data1(labels):
             'x': points['xy'][:, 0],
             'y': points['xy'][:, 1],
             'visible': points['visible'],
-            'score': points['score'],
             'node_name': points['name'],
             })
+
+        # User instances have no score
+        # This happens when working with an SLP file from the GUI
+        if 'score' in points.dtype.names:
+            df['score'] = points['score']
+        
+        # Set index
         df = df.set_index('node_name')
+        
+        # Store
         df_l.append(df)
         
         # If we don't trust the frame_idx
@@ -43,7 +51,61 @@ def load_slp_data1(labels):
     # Return
     return points
 
-def load_slp_data2(labels):
+def load_slp_data1b(labels):
+    """Load data from sleap.Labels into numpy array
+    
+    Like load_slp_data1, but only for predictions, not user-labeled
+    labels must be from a single video
+    """
+    df_l = []
+    df_keys_l = []
+    for n_frame, labeled_frame in enumerate(labels):
+        # Predicted instances only
+        inst_l = labeled_frame.predicted_instances
+        
+        # Skip frames with no prediction
+        if len(inst_l) == 0:
+            continue
+        
+        # Single animal
+        assert len(inst_l) == 1
+        points = inst_l[0].points
+        
+        df = pandas.DataFrame.from_dict({
+            'x': points['xy'][:, 0],
+            'y': points['xy'][:, 1],
+            'visible': points['visible'],
+            'node_name': points['name'],
+            })
+
+        # User instances have no score
+        # This happens when working with an SLP file from the GUI
+        if 'score' in points.dtype.names:
+            df['score'] = points['score']
+        
+        # Set index
+        df = df.set_index('node_name')
+        
+        # Store
+        df_l.append(df)
+        
+        # If we don't trust the frame_idx
+        # df_keys_l.append(n_frame)
+        
+        # If we do
+        df_keys_l.append(labeled_frame.frame_idx)
+
+    # Concat
+    points = pandas.concat(
+        df_l, keys=df_keys_l, names=['frame_number'])
+    
+    # Sort by index, just in case
+    points = points.sort_index()
+    
+    # Return
+    return points
+    
+def load_slp_data2(preds, video=None):
     """Load predictions from an SLP file.
     
     This methods uses .numpy() which is faster but doesn't work well when
@@ -51,7 +113,7 @@ def load_slp_data2(labels):
     """
     # Slice out single animal
     # Shape will be n_frames, n_nodes, 3
-    pred_points_arr = preds.numpy(return_confidence=True)[:, 0]
+    pred_points_arr = preds.numpy(return_confidence=True, video=video)[:, 0]
     
     # DataFrame it
     n_frames = len(preds)
